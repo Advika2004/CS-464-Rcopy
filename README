@@ -1,0 +1,87 @@
+Advika Deodhar 6pm Lab 
+
+--------------------------------------------------------------------------------------------------------------
+
+Readmeeee again woooooo!!! Time to read the spec
+
+Writing two programs, RCOPY and SERVER
+
+RCOPY: 
+- takes in a src filename, dest filename, window size, buffer size, error-rate, remote-machine, remote-port.  
+- window size = how many packets in the window
+- buffer size = number of bytes to read from disk and send in each packet
+- error-rate = percent of packets that are in error (I DONT GET THIS)
+- remote-machine = the machine that runs the server
+- remote-port = server port number
+- if it cant open the dest file print out error
+- you ask the server if it has the src filename
+- if it does, the server will send that file to the client 
+- the client will downlaod info from the source and print that out to the dest file
+- will need to create an application PDU and send the data in chunks 
+
+SERVER:
+- takes in the window-size, buffer-size, and filename from rcopy (make a struct?)
+- the server takes in an optional port number to use (if not given, use 0 to pass to bind())
+- can only terminate with ^c
+- should process multiple clients at the same time (need to do threading??)
+- if there is an error opening the file, send an error packet back to the client
+- 
+
+ERRORS:
+- for error checking use the sendToErr() function
+
+WINDOW:
+- need a separate library for the windowing window.c window.h
+- can only use 5 global variables in this, and those can't be used anywhere else 
+- both the server and client use this structure 
+    - the server will use it to keep track of what packets have been sent but not acknowledged yet
+    - the client uses it to keep track of packets that come in out of order (it will reorder before printing to output file)
+- make this by mallocking for an array (make sure you free and valgrind to check)
+- make it a circular buffer
+- must only edit the buffer through the windowing library functions I write (cant access ideces directly)
+
+SELECTIVE REJECT:
+- this protocol works by only resending the packet that went missing
+- if a packet is missing, client sends SREJ message to server
+- server resends the missing packet
+- client sends a RR to say that it is ready to continue receiving
+
+UDP CONNECTION:
+
+
+FILENAME EXCHANGE: 
+
+- Send file state: 
+    - create a socket to send on 
+    - make the filename sending PDU (4 byte sequence number)(2 byte checksum)(1 byte flag)(100 bytes filename)
+        - need to calculate the checksum
+            - zero it out upon construction
+            - call checksum on whole packet
+            - memcpy the packet back out 
+        - sequence number is in network order (choose some value?)
+        - flag = 8 
+        - verify that the packet is being created properly
+    - use sendToErr() to send this packet
+    - if the timer expires or data is received, then stay in this state 
+        - close the socket
+        - open a new socket
+        - send filename on the new scoket 
+        - increment the counter
+        - re-start the poll(1) CLARIFY
+    - if time expires and count is greater than 9
+        - move to DONE state
+    - if bad file is received 
+        - move to DONE state
+    - if file is OK
+        - move to fileOK state
+
+- File Ok State:
+    - open the output file
+    - if opening output file fails move to DONE state
+    - if it works then move to the RECVDATA state
+
+- DONE State:
+    - print out an error and terminate process
+
+- RECEIVE Data State: 
+    - do nothing here for now, will implement this when we get into the sliding window? 
