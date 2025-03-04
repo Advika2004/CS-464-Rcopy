@@ -14,6 +14,8 @@ int main (int argc, char *argv[])
 	struct sockaddr_in6 server;		// Supports 4 and 6 but requires IPv6 struct
 	int state = SEND_FILENAME;
 
+	setupPollSet();
+
 	RcopyParams params = checkArgs(argc, argv);
 	
 	socketNum = setupUdpClientToServer(&server, params.remote_machine, params.remote_port);
@@ -70,7 +72,6 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 	int poll; //make a socket to recieve on ? 
 
 	// add the current socket to the poll set
-	setupPollSet();
 	addToPollSet(socketNum);
 
 	// can send up to 10 times
@@ -113,6 +114,7 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
         	if (response_flag == 9) { 
 
 				uint16_t newPort;
+				//!add a check here to make sure the new port gets read out properly
             	memcpy(&newPort, recv_buffer + 1, 2);
             	newPort = ntohs(newPort);
 
@@ -120,8 +122,7 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 
 				socketNum = setupUdpClientToServer(server, params.remote_machine, newPort);
 
-				//!again do i need this? wont it do this at the top
-				//addToPollSet(socketNum);
+				addToPollSet(socketNum);
 
             	return FILE_VALID;
         	} 
@@ -299,7 +300,7 @@ RcopyParams checkArgs(int argc, char * argv[])
 	strncpy(parameters.src_filename, argv[1], MAX_FILENAME_LEN - 1);
     parameters.src_filename[MAX_FILENAME_LEN - 1] = '\0';
 
-	strncpy(parameters.dest_filename, argv[1], MAX_FILENAME_LEN - 1);
+	strncpy(parameters.dest_filename, argv[2], MAX_FILENAME_LEN - 1);
     parameters.dest_filename[MAX_FILENAME_LEN - 1] = '\0';
 
 	parameters.window_size = atoi(argv[3]);

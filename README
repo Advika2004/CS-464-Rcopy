@@ -49,7 +49,7 @@ SELECTIVE REJECT:
 UDP CONNECTION:
 
 
-FILENAME EXCHANGE: 
+FILENAME EXCHANGE RCOPY: 
 
 - Send file state: 
     - create a socket to send on 
@@ -87,3 +87,85 @@ FILENAME EXCHANGE:
 - RECEIVE Data State: 
     - do nothing here for now, will implement this when we get into the sliding window? 
     - need to do sliding window for client and server?
+
+FILENAME EXCHANGE SERVER:
+- GET FILENAME State:
+    - fork off a child server process and pass it the info of the client
+    - get the filename packet
+        - get the client port number and IP address from doing the recvFrom
+    - open the file
+    - close the main server socket
+    - if opening the file doest work, move to DONE state
+    - if the file is ok, open a new socket and send a filename ack packet and move to SEND DATA state
+- DONE State:
+    - terminate the server (no printing of error)
+- SEND DATA State:
+    - send the data packet
+    - set count to 0
+    - call poll
+    - move to WAIT ON ACK state
+    - if the EOF flag is read set the counter to 0 and move to the WAIT ON EOF ack
+- WAIT ON ACK State:
+    - if it times out, and the count is > 9 move to the done state 
+    - if the timer goes out and the count is < 9 resend the data, count ++, poll
+    - if ack is recieved, move back to the SEND DATA state to send the next packet
+- WAIT ON EOF ACK: 
+    - if the timer expires, resend the EOF packet, count++ and restart the poll
+    - if the timer expires and the count > 9, close the file, close the socket, and move to the DONE state
+    - if the EOF ack is received, close the file and close the socket and move to DONE state
+
+
+
+void processClient(int socketNum) {
+    struct sockaddr_in6 client;
+    socklen_t clientAddrLen = sizeof(client);
+    uint8_t buffer[MAXBUF];
+
+    // Receive filename packet
+    int recvLen = recvfrom(socketNum, buffer, MAXBUF, 0, (struct sockaddr*)&client, &clientAddrLen);
+    if (recvLen < 0) {
+        perror("recvfrom failed");
+        return;
+    }
+
+    // Validate checksum
+    uint16_t receivedChecksum;
+    memcpy(&receivedChecksum, buffer + 4, 2);
+    receivedChecksum = ntohs(receivedChecksum);
+    
+    uint16_t calculatedChecksum = in_cksum((uint16_t*)buffer, recvLen);
+    if (receivedChecksum != calculatedChecksum) {
+        printf("Checksum mismatch, dropping packet.\n");
+        return;
+    }
+
+    // Extract filename
+    char filename[MAX_FILENAME_LEN];
+    memcpy(filename, buffer + 7, MAX_FILENAME_LEN);
+    filename[MAX_FILENAME_LEN - 1] = '\0'; // Ensure null termination
+
+    // Open file
+    FILE *file = fopen(filename, "rb");
+    if (file == NULL) {
+        perror("File open failed, sending error response");
+        uint8_t errorPDU[7];
+        memcpy(errorPDU, makeFilenameAckPDU(0), 7);
+        errorPDU[6] = 32;  // Flag for error response
+        sendto(socketNum, errorPDU, 7, 0, (struct sockaddr*)&client, clientAddrLen);
+        return;
+    }
+
+    // Send Filename ACK
+    uint8_t *ackPacket = makeFilenameAckPDU(1);
+    sendto(socketNum, ackPacket, 7, 0, (struct sockaddr*)&client, clientAddrLen);
+
+    // Fork a child to handle file transfer
+    pid_t childPid = fork();
+    if (childPid == 0) {  // Child process
+        close(socketNum);
+        int dataSocket = udpServerSetup(0); // Get a new socket
+        sendFileToClient(dataSocket, &client, file);
+        fclose(file);
+        exit(0);
+    }
+}
