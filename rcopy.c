@@ -42,82 +42,57 @@ int main (int argc, char *argv[])
 		//check the state
         switch (state) {
             case SEND_FILENAME:
-                state = doSendFilenameState(params, socketNum, server, buffer_to_send);
+                state = doSendFilenameState(params, socketNum, &server, buffer_to_send);
                 break;
             case FILE_VALID:
-                printf("");
-                state = doFileValidState();
+                printf("h");
+                state = doFileValidState(params);
                 break;
             case GET_DATA:
-                printf("");
+                printf("h");
                 state = doGetDataState();
                 break;
             case DONE:
-                printf("");
-				doDoneState();
+                printf("h");
+				doDoneState(socketNum, curr_file_open);
                 break;
         }
     }
-	talkToServer(socketNum, &server);
+	//talkToServer(socketNum, &server);
 	close(socketNum);
 	return 0;
 }
 
-
-// - Send file state: 
-//     - create a socket to send on 
-//     - make the filename sending PDU (4 byte sequence number)(2 byte checksum)(1 byte flag)(1400 byte payload)
-//     - choosing arbitrarily to have it be filename, buffer-size, then window-size
-//         - need to calculate the checksum
-//             - zero it out upon construction
-//             - call checksum on whole packet
-//             - memcpy the packet back out 
-//         - sequence number is in network order (choose some value?)
-//         - flag = 8 
-//         - verify that the packet is being created properly
-//     - use sendToErr() to send this packet
-//     - if the timer expires or data is received, then stay in this state 
-//         - close the socket
-//         - open a new socket
-//         - send filename on the new scoket 
-//         - increment the counter
-//         - re-start the poll(1) CLARIFY
-//     - if time expires and count is greater than 9
-//         - move to DONE state
-//     - if bad file is received 
-//         - move to DONE state
-//     - if file is OK
-//         - move to fileOK state
-
 int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 * server, uint8_t* buffer){
-	int serverAddrLen = sizeof(struct sockaddr_in6);
+	socklen_t serverAddrLen = sizeof(struct sockaddr_in6);
 	uint8_t recv_buffer[MAXBUF];
 	int sends_attempted = 0;
-	int timeout = 1000 //need it to be one second 
+	int timeout = 1000; //need it to be one second 
 	int poll; //make a socket to recieve on ? 
 
 	// add the current socket to the poll set
 	setupPollSet();
-	addToPollSet(*socketNum);
+	addToPollSet(socketNum);
 
 	// can send up to 10 times
 	while (sends_attempted < 9){
-		int bytes_sent = sendToErr(socketNum, buffer, 114, 0, (struct sockaddr *) server, serverAddrLen);
+		int bytes_sent = sendtoErr(socketNum, buffer, 114, 0, (struct sockaddr *) server, serverAddrLen);
 		if (bytes_sent < 0){
-			perror("sendToErr failed\n");
+			perror("sendtoErr failed\n");
 			return DONE;
 		}
  
-		int poll = pollCall(timeout);
+		poll = pollCall(timeout);
 		if (poll == -1){
 			//that means the timeout expired so need to resend 
 			//close the current socket
 			//open a new socket, send on the new one
-			removeFromPollSet(*socketNum);
-			close(*socketNum);
-			*socketNum = setupUdpClientToServer(&server, params.remote_machine, params.remote_port);
+			removeFromPollSet(socketNum);
+			close(socketNum);
+			socketNum = setupUdpClientToServer(server, params.remote_machine, params.remote_port);
 			//!do i need to re-add it, wont it just do this at the top?
-			addToPollSet(*socketNum);
+			//addToPollSet(socketNum);
+
 			sends_attempted++;
 			return SEND_FILENAME;
 		}
@@ -125,7 +100,7 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 		// it returned a valid socket to read so its going to recieve data
 		// after it receives it and the flag is the filename ack flag it will go to get data state
 		else {
-			int recieved = recvFrom(*socketNum, recv_buffer, MAXBUF, 0, (struct sockaddr *) server, &serverAddrLen);
+			int recieved = recvfrom(socketNum, recv_buffer, MAXBUF, 0, (struct sockaddr *) server, &serverAddrLen);
 			
 			if (recieved < 0) {
             	perror("recvfrom failed");
@@ -142,12 +117,12 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
             	memcpy(&newPort, recv_buffer + 1, 2);
             	newPort = ntohs(newPort);
 
-				close(*socketNum);
+				close(socketNum);
 
-				*socketNum = setupUdpClientToServer(&server, params.remote_machine, newPort);
+				socketNum = setupUdpClientToServer(server, params.remote_machine, newPort);
 
 				//!again do i need this? wont it do this at the top
-				addToPollSet(*socketNum);
+				//addToPollSet(socketNum);
 
             	return FILE_VALID;
         	} 
@@ -161,14 +136,40 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 	return DONE;
 }
 
-int doFileValidState(){
-	return 0;
+int doFileValidState(RcopyParams params){
+	curr_file_open = fopen(params.dest_filename, "wb");
+
+	if (curr_file_open == NULL){
+		perror("Couldn't open file\n");
+		return DONE;
+	}
+
+	//!do i need to re-add it, wont it just do this at the top?
+	//addToPollSet(socketNum);
+
+	return GET_DATA;
 }
+
 int doGetDataState(){
-	return 0;
+	//- do nothing here for now, will implement this when we get into the sliding window? 
+    //- need to do sliding window for client and server?
+	printf("reached get data state\n");
+	return DONE;
 }
-int doDoneState(){
-	return 0;
+
+void doDoneState(int socketNum, FILE *destFile){
+	
+	//if the file was open close it
+    if (destFile != NULL) {
+        fclose(destFile);
+    }
+
+    // Remove from poll set and close socket
+    removeFromPollSet(socketNum);
+    close(socketNum);
+
+	printf("Error somemwhere previously...terminating client.\n");
+	exit(1);
 }
 
 //debug print function 
@@ -241,31 +242,6 @@ uint8_t* makeFilenamePDUAfterChecksum(uint8_t* buffer, uint16_t calculated_check
     memcpy(buffer + 4, &calculated_checksum, 2);
 
     return buffer;
-}
-
-void talkToServer(int socketNum, struct sockaddr_in6 * server)
-{
-	int serverAddrLen = sizeof(struct sockaddr_in6);
-	char * ipString = NULL;
-	int dataLen = 0; 
-	char buffer[MAXBUF+1];
-	
-	buffer[0] = '\0';
-	while (buffer[0] != '.')
-	{
-		dataLen = readFromStdin(buffer);
-
-		printf("Sending: %s with len: %d\n", buffer,dataLen);
-	
-		safeSendto(socketNum, buffer, dataLen, 0, (struct sockaddr *) server, serverAddrLen);
-		
-		safeRecvfrom(socketNum, buffer, MAXBUF, 0, (struct sockaddr *) server, &serverAddrLen);
-		
-		// print out bytes received
-		ipString = ipAddressToString(server);
-		printf("Server with ip: %s and port %d said it received %s\n", ipString, ntohs(server->sin6_port), buffer);
-	      
-	}
 }
 
 int readFromStdin(char * buffer)
@@ -349,6 +325,39 @@ RcopyParams checkArgs(int argc, char * argv[])
 }
 
 
+
+
+
+
+
+
+
+
+
+// void talkToServer(int socketNum, struct sockaddr_in6 * server)
+// {
+// 	int serverAddrLen = sizeof(struct sockaddr_in6);
+// 	char * ipString = NULL;
+// 	int dataLen = 0; 
+// 	char buffer[MAXBUF+1];
+	
+// 	buffer[0] = '\0';
+// 	while (buffer[0] != '.')
+// 	{
+// 		dataLen = readFromStdin(buffer);
+
+// 		printf("Sending: %s with len: %d\n", buffer,dataLen);
+	
+// 		safeSendto(socketNum, buffer, dataLen, 0, (struct sockaddr *) server, serverAddrLen);
+		
+// 		safeRecvfrom(socketNum, buffer, MAXBUF, 0, (struct sockaddr *) server, &serverAddrLen);
+		
+// 		// print out bytes received
+// 		ipString = ipAddressToString(server);
+// 		printf("Server with ip: %s and port %d said it received %s\n", ipString, ntohs(server->sin6_port), buffer);
+	      
+// 	}
+// }
 
 
 
