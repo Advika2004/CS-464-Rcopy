@@ -1,19 +1,246 @@
 #include "rcopy.h"
 
+
+typedef enum {
+    SEND_FILENAME,
+    FILE_VALID,
+    GET_DATA,
+    DONE
+} state;
+
 int main (int argc, char *argv[])
  {
 	int socketNum = 0;				
 	struct sockaddr_in6 server;		// Supports 4 and 6 but requires IPv6 struct
+	int state = SEND_FILENAME;
 
 	RcopyParams params = checkArgs(argc, argv);
 	
 	socketNum = setupUdpClientToServer(&server, params.remote_machine, params.remote_port);
-	
-	talkToServer(socketNum, &server);
-	
-	close(socketNum);
 
+	//need to call this here bcasue need to call this before calling sendErr?
+	sendErr_init(params.error_rate, DROP_ON, FLIP_OFF, DEBUG_ON, RSEED_OFF);
+
+	uint8_t* buffer = makeFilenamePDUBeforeChecksum(params);
+	uint16_t calculated_checksum = calculateFilenameChecksum(buffer);
+	uint8_t* buffer_to_send = makeFilenamePDUAfterChecksum(buffer, calculated_checksum);
+
+	//! DEBUG: will recalculate the checksum after it has been calculated before sending 
+	uint16_t result = calculateFilenameChecksum(buffer_to_send);
+	if (result == 0){
+		printf("checksum calculated right: %d\n", result);
+	}
+	else{
+		printf("checksum not right\n");
+		exit(1);
+	}
+
+	printFilenamePDU(buffer_to_send);
+
+	//while the state is not the done state
+    while (state != DONE) {
+		//check the state
+        switch (state) {
+            case SEND_FILENAME:
+                state = doSendFilenameState(params, socketNum, server, buffer_to_send);
+                break;
+            case FILE_VALID:
+                printf("");
+                state = doFileValidState();
+                break;
+            case GET_DATA:
+                printf("");
+                state = doGetDataState();
+                break;
+            case DONE:
+                printf("");
+				doDoneState();
+                break;
+        }
+    }
+	talkToServer(socketNum, &server);
+	close(socketNum);
 	return 0;
+}
+
+
+// - Send file state: 
+//     - create a socket to send on 
+//     - make the filename sending PDU (4 byte sequence number)(2 byte checksum)(1 byte flag)(1400 byte payload)
+//     - choosing arbitrarily to have it be filename, buffer-size, then window-size
+//         - need to calculate the checksum
+//             - zero it out upon construction
+//             - call checksum on whole packet
+//             - memcpy the packet back out 
+//         - sequence number is in network order (choose some value?)
+//         - flag = 8 
+//         - verify that the packet is being created properly
+//     - use sendToErr() to send this packet
+//     - if the timer expires or data is received, then stay in this state 
+//         - close the socket
+//         - open a new socket
+//         - send filename on the new scoket 
+//         - increment the counter
+//         - re-start the poll(1) CLARIFY
+//     - if time expires and count is greater than 9
+//         - move to DONE state
+//     - if bad file is received 
+//         - move to DONE state
+//     - if file is OK
+//         - move to fileOK state
+
+int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 * server, uint8_t* buffer){
+	int serverAddrLen = sizeof(struct sockaddr_in6);
+	uint8_t recv_buffer[MAXBUF];
+	int sends_attempted = 0;
+	int timeout = 1000 //need it to be one second 
+	int poll; //make a socket to recieve on ? 
+
+	// add the current socket to the poll set
+	setupPollSet();
+	addToPollSet(*socketNum);
+
+	// can send up to 10 times
+	while (sends_attempted < 9){
+		int bytes_sent = sendToErr(socketNum, buffer, 114, 0, (struct sockaddr *) server, serverAddrLen);
+		if (bytes_sent < 0){
+			perror("sendToErr failed\n");
+			return DONE;
+		}
+ 
+		int poll = pollCall(timeout);
+		if (poll == -1){
+			//that means the timeout expired so need to resend 
+			//close the current socket
+			//open a new socket, send on the new one
+			removeFromPollSet(*socketNum);
+			close(*socketNum);
+			*socketNum = setupUdpClientToServer(&server, params.remote_machine, params.remote_port);
+			//!do i need to re-add it, wont it just do this at the top?
+			addToPollSet(*socketNum);
+			sends_attempted++;
+			return SEND_FILENAME;
+		}
+		// now the case that the timer has NOT expired
+		// it returned a valid socket to read so its going to recieve data
+		// after it receives it and the flag is the filename ack flag it will go to get data state
+		else {
+			int recieved = recvFrom(*socketNum, recv_buffer, MAXBUF, 0, (struct sockaddr *) server, &serverAddrLen);
+			
+			if (recieved < 0) {
+            	perror("recvfrom failed");
+            	return DONE;
+        	}
+			//check if it was a filename ack
+        	uint8_t response_flag = recv_buffer[0];
+
+			//if file ack receivied from server, its coming from a child 
+			//need to open a new socket to talk to the child
+        	if (response_flag == 9) { 
+
+				uint16_t newPort;
+            	memcpy(&newPort, recv_buffer + 1, 2);
+            	newPort = ntohs(newPort);
+
+				close(*socketNum);
+
+				*socketNum = setupUdpClientToServer(&server, params.remote_machine, newPort);
+
+				//!again do i need this? wont it do this at the top
+				addToPollSet(*socketNum);
+
+            	return FILE_VALID;
+        	} 
+			else {
+            	removeFromPollSet(socketNum);
+            	return DONE;
+        	}
+    	}
+	}
+	//the case where the sends_attempted are greater than 9
+	return DONE;
+}
+
+int doFileValidState(){
+	return 0;
+}
+int doGetDataState(){
+	return 0;
+}
+int doDoneState(){
+	return 0;
+}
+
+//debug print function 
+void printFilenamePDU(uint8_t *buffer) {
+    uint32_t seqNum;
+    uint16_t checksum;
+    uint8_t flag;
+    char filename[101]; // +1 for null terminator
+    uint16_t bufferSize;
+    uint32_t windowSize;
+
+    // Extract fields from buffer
+    memcpy(&seqNum, buffer, 4);
+    memcpy(&checksum, buffer + 4, 2);
+    memcpy(&flag, buffer + 6, 1);
+    memcpy(filename, buffer + 7, 100);
+    filename[100] = '\0'; // Ensure null-termination
+    memcpy(&bufferSize, buffer + 107, 2);
+    memcpy(&windowSize, buffer + 109, 4);
+
+    // Print values
+    printf("------ Filename PDU ------\n");
+    printf("Sequence Number: %u\n", seqNum);
+    printf("Checksum: 0x%04x\n", checksum);
+    printf("Flag: %u\n", flag);
+    printf("Filename: %s\n", filename);
+    printf("Buffer Size: %u\n", bufferSize);
+    printf("Window Size: %u\n", windowSize);
+    printf("--------------------------\n");
+}
+
+//will make the fist filename PDU [sequence number][checksum][flag][filename][buffer size][window size]
+uint8_t* makeFilenamePDUBeforeChecksum(RcopyParams params){
+
+    uint8_t static buffer[MAX_HEADER_LEN + MAX_FILENAME_LEN + MAX_BUFFER_LEN + MAX_WINDOW_LEN];
+
+	//chose 1 for the sequence number
+    uint32_t sequence_num = ntohl(1);
+    memcpy(buffer, &sequence_num, 4);
+	
+	//initially put checksum zerod out
+	uint16_t zero_checksum = 0;
+    memcpy(buffer + 4, &zero_checksum, 2);
+
+	//flag for fileame packet is 8
+	uint8_t flag = 8;
+    memcpy(buffer + 6, &flag, 1);
+
+	memcpy(buffer + 7, &params.src_filename, 100);
+
+	memcpy(buffer + 107, &params.buffer_size, 2);
+
+	memcpy(buffer + 109, &params.window_size, 4);
+
+    return buffer;
+}
+
+uint16_t calculateFilenameChecksum(uint8_t* buffer){
+	uint16_t static temp_buff[MAX_HEADER_LEN + MAX_FILENAME_LEN + MAX_BUFFER_LEN + MAX_WINDOW_LEN + 1];
+	memcpy(temp_buff, buffer, 113);
+	uint8_t even_length = 0;
+	memcpy(temp_buff + 113, &even_length, 1);
+	uint16_t calculatedChecksum = in_cksum(temp_buff, sizeof(temp_buff));
+	return calculatedChecksum;
+}
+
+uint8_t* makeFilenamePDUAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum){
+
+	//put in the calculated checksum
+    memcpy(buffer + 4, &calculated_checksum, 2);
+
+    return buffer;
 }
 
 void talkToServer(int socketNum, struct sockaddr_in6 * server)
@@ -81,8 +308,8 @@ RcopyParams checkArgs(int argc, char * argv[])
 	}
 
 	// make sure filenames are not above 100 characters 
-	if (strlen(argv[1]) > MAX_FILENAME || strlen(argv[1]) == 0 || strlen(argv[2]) > MAX_FILENAME || strlen(argv[2]) == 0) {
-        printf("Error: Filenames must be between 1 and %d characters.\n", MAX_FILENAME);
+	if (strlen(argv[1]) > MAX_FILENAME_LEN || strlen(argv[1]) == 0 || strlen(argv[2]) > MAX_FILENAME_LEN || strlen(argv[2]) == 0) {
+        printf("Error: Filenames must be between 1 and %d characters.\n", MAX_FILENAME_LEN);
         exit(1);
     }
 
@@ -94,11 +321,11 @@ RcopyParams checkArgs(int argc, char * argv[])
 
 	// if they are valid, then put them into the struct
 
-	strncpy(parameters.src_filename, argv[1], MAX_FILENAME);
-    parameters.src_filename[MAX_FILENAME] = '\0';
+	strncpy(parameters.src_filename, argv[1], MAX_FILENAME_LEN - 1);
+    parameters.src_filename[MAX_FILENAME_LEN - 1] = '\0';
 
-	strncpy(parameters.dest_filename, argv[1], MAX_FILENAME);
-    parameters.dest_filename[MAX_FILENAME] = '\0';
+	strncpy(parameters.dest_filename, argv[1], MAX_FILENAME_LEN - 1);
+    parameters.dest_filename[MAX_FILENAME_LEN - 1] = '\0';
 
 	parameters.window_size = atoi(argv[3]);
 	parameters.buffer_size = atoi(argv[4]);

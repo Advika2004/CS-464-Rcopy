@@ -53,7 +53,8 @@ FILENAME EXCHANGE:
 
 - Send file state: 
     - create a socket to send on 
-    - make the filename sending PDU (4 byte sequence number)(2 byte checksum)(1 byte flag)(100 bytes filename)
+    - make the filename sending PDU (4 byte sequence number)(2 byte checksum)(1 byte flag)(1400 byte payload)
+    - choosing arbitrarily to have it be filename, buffer-size, then window-size
         - need to calculate the checksum
             - zero it out upon construction
             - call checksum on whole packet
@@ -85,3 +86,4 @@ FILENAME EXCHANGE:
 
 - RECEIVE Data State: 
     - do nothing here for now, will implement this when we get into the sliding window? 
+    - need to do sliding window for client and server?

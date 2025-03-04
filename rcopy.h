@@ -18,17 +18,24 @@
 #include "gethostbyname.h"
 #include "networks.h"
 #include "safeUtil.h"
+#include "cpe464.h"
 
 #define MAXBUF 80
-#define MAX_FILENAME 100
+#define MAX_FILENAME_LEN 100
+#define MAX_PAYLOAD_LEN 1400
+#define MAX_WINDOW_LEN 4
+#define MAX_BUFFER_LEN 2
+#define MAX_HEADER_LEN 7
 
 //! should this be some length? is it specified somwhere
 #define MAX_REMOTE_MACHINE 256 
 
+
+//struct to store input
 typedef struct RcopyParams {
     // src filename, dest filename, window size, buffer size, error-rate, remote-machine, remote-port.
-    char src_filename[MAX_FILENAME + 1];
-    char dest_filename[MAX_FILENAME + 1];
+    char src_filename[MAX_FILENAME_LEN + 1];
+    char dest_filename[MAX_FILENAME_LEN + 1];
     int window_size;
     int buffer_size;
     double error_rate;
@@ -39,3 +46,8 @@ typedef struct RcopyParams {
 void talkToServer(int socketNum, struct sockaddr_in6 * server);
 int readFromStdin(char * buffer);
 RcopyParams checkArgs(int argc, char * argv[]);
+uint8_t* makeFilenamePDUBeforeChecksum(RcopyParams params);
+uint16_t calculateFilenameChecksum(uint8_t* buffer);
+uint8_t* makeFilenamePDUAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);
+void printFilenamePDU(uint8_t *buffer);
+uint16_t DEBUGCHECKSUM(uint16_t* temp_buff, uint16_t calculatedChecksum);
