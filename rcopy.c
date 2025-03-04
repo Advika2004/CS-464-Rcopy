@@ -58,7 +58,6 @@ int main (int argc, char *argv[])
                 break;
         }
     }
-	//talkToServer(socketNum, &server);
 	close(socketNum);
 	return 0;
 }
