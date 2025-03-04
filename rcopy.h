@@ -19,6 +19,8 @@
 #include "networks.h"
 #include "safeUtil.h"
 #include "cpe464.h"
+#include "pollLib.h"
+
 
 #define MAXBUF 80
 #define MAX_FILENAME_LEN 100
@@ -38,16 +40,22 @@ typedef struct RcopyParams {
     char dest_filename[MAX_FILENAME_LEN + 1];
     int window_size;
     int buffer_size;
-    double error_rate;
+    double error_rate; 
     char remote_machine[MAX_REMOTE_MACHINE + 1];
-    int remote_port;
-}RcopyParams;
+    int remote_port; 
+} RcopyParams; 
 
-void talkToServer(int socketNum, struct sockaddr_in6 * server);
+//void talkToServer(int socketNum, struct sockaddr_in6 * server);
 int readFromStdin(char * buffer);
 RcopyParams checkArgs(int argc, char * argv[]);
 uint8_t* makeFilenamePDUBeforeChecksum(RcopyParams params);
 uint16_t calculateFilenameChecksum(uint8_t* buffer);
 uint8_t* makeFilenamePDUAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);
 void printFilenamePDU(uint8_t *buffer);
-uint16_t DEBUGCHECKSUM(uint16_t* temp_buff, uint16_t calculatedChecksum);
+int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 * server, uint8_t* buffer);
+int doFileValidState(RcopyParams params);
+int doGetDataState();
+void doDoneState(int socketNum, FILE *destFile);
+
+//global to hold the current file that is open
+FILE *curr_file_open;
