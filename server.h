@@ -10,6 +10,8 @@
 #include "gethostbyname.h"
 #include "networks.h"
 #include "safeUtil.h"
+#include "cpe464.h"
+#include "pollLib.h"
 
 #define MAXBUF 80
 #define ACK_BUFF_SIZE 7
@@ -27,3 +29,8 @@ typedef struct ServerParams{
 
 void processClient(int socketNum);
 ServerParams checkArgs(int argc, char *argv[]);
+int doGetFilenameState();
+int doDoneState();
+int doSendDataState();
+int doWaitOnAckState();
+int doWaitOnEOFAckState();

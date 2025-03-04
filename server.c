@@ -3,20 +3,114 @@
 
 #include "server.h"
 
+typedef enum {
+	INIT,
+    GET_FILENAME,
+    DONE,
+    SEND_DATA,
+    WAIT_ON_ACK,
+	WAIT_ON_EOF_ACK
+} state;
+
 int main ( int argc, char *argv[]  )
 { 
 	int socketNum = 0;				
+
+	int state = INIT;
 
 	ServerParams serverParam = checkArgs(argc, argv);
 		
 	socketNum = udpServerSetup(serverParam.port_number);
 
-	processClient(socketNum);
+	// need to poll on the incoming socket for the filename connection
+	setupPollSet();
+	addToPollSet(socketNum);
+	// need to poll forever ? so that i can manage all incoming clients?
+	int poll = pollCall(-1);
 
+	//need to call this here bcasue need to call this before calling sendErr?
+	sendErr_init(serverParam.error_rate, DROP_ON, FLIP_OFF, DEBUG_ON, RSEED_OFF);
+
+	int dataLen = 0; 
+	char buffer[114];	  
+	struct sockaddr_in6 client;		
+	int clientAddrLen = sizeof(client);	
+
+	// will extract the values from the client and store it in here
+	char filename[MAX_FILENAME_LEN];
+	uint8_t buffer_size_buff[MAX_BUFFER_LEN];
+	uint8_t window_size_buff[MAX_WINDOW_LEN];
+
+	//take in the filename packet from the client
+    int recv_len = recvfrom(socketNum, buffer, 114, 0, (struct sockaddr*)&client, &clientAddrLen);
+    if (recv_len < 0) {
+        perror("recvfrom failed");
+        return;
+    }
+
+	//calculate the checksum and see if its valid 
+	uint16_t result = calculateFilenameChecksum(buffer);
+	if (result == 0){
+		// can proceed to extract the correct info
+		memcpy(filename, buffer + 7, MAX_FILENAME_LEN);
+		memcpy(buffer_size_buff, buffer + 107, 2);
+		memcpy(window_size_buff, buffer + 109, 4);
+
+		//!DEBUG: add print statements to check that it was read out properly
+		printf("checksum calculated right: %d\n", result);
+		state = GET_FILENAME;
+	}
+
+	else{
+		//keep waiting for packet? how to do this? just continue?
+	}
+
+	//while the state is not the done state
+    while (state != DONE) {
+		//check the state
+        switch (state) {
+            case GET_FILENAME:
+                state = doGetFilenameState();
+                break;
+            case DONE:
+                printf("h");
+                state = doDoneState();
+                break;
+            case SEND_DATA:
+                printf("h");
+                state = doSendDataState();
+                break;
+            case WAIT_ON_ACK:
+                printf("h");
+				state = doWaitOnAckState();
+                break;
+			case WAIT_ON_EOF_ACK:
+                printf("h");
+				state = doWaitOnEOFAckState();
+                break;
+        }
+    }
 	close(socketNum);
+	return 0;
+}
+
+int doGetFilenameState() {
 	
 	return 0;
 }
+int doDoneState() {
+	return 0;
+}
+int doSendDataState() {
+	return 0;
+}
+int doWaitOnAckState() {
+	return 0;
+}
+int doWaitOnEOFAckState() {
+	return 0;
+}
+
 
 void processClient(int socketNum)
 {
