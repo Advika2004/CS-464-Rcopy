@@ -29,12 +29,12 @@ typedef struct ServerParams{
 
 void processClient(int socketNum);
 ServerParams checkArgs(int argc, char *argv[]);
-int doGetFilenameState();
-int doDoneState();
+int doGetFilenameState(struct sockaddr_in6* client, socklen_t clientAddrLen, int main_server_socket);
 int doSendDataState();
+int doDoneState();
 int doWaitOnAckState();
 int doWaitOnEOFAckState();
-void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6* client, int clientAddrLen, int main_server_socket);
+void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6* client, socklen_t clientAddrLen, int main_server_socket);
 uint8_t* makeTalkHereNowBeforeChecksum();
 uint16_t calculateFilenameChecksumACK(uint8_t* buffer);
 uint8_t* makeTalkHereNowAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);

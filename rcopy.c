@@ -8,14 +8,20 @@ typedef enum {
 
 int main (int argc, char *argv[])
  {	
+	int socketNum = 0;				
 	struct sockaddr_in6 server;		// Supports 4 and 6 but requires IPv6 struct
 	int state = SEND_FILENAME;
 
 	setupPollSet();
 
 	RcopyParams params = checkArgs(argc, argv);
+
+	//! global that holds the main server upon start
+	//! when we start this is where we are talking to
+	current_server_port = params.remote_port;
 	
-	socketNum = setupUdpClientToServer(&server, params.remote_machine, params.remote_port);
+	socketNum = setupUdpClientToServer(&server, params.remote_machine, current_server_port);
+	printf("first send with this socketNum: %d\n", socketNum);
 
 	//need to call this here bcasue need to call this before calling sendErr?
 	sendErr_init(params.error_rate, DROP_ON, FLIP_OFF, DEBUG_OFF, RSEED_OFF);
@@ -64,19 +70,24 @@ int main (int argc, char *argv[])
 
 int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 * server, uint8_t* buffer){
 	socklen_t serverAddrLen = sizeof(struct sockaddr_in6);
-	uint8_t recv_buffer[MAXBUF];
+	uint8_t recv_buffer[ACK_BUFF_SIZE];
 	int sends_attempted = 0;
 	int timeout = 1000; //need it to be one second 
 	int poll; //make a socket to recieve on ? 
+
+	printf("WHAT IS THE CURRENT SERVER PORT: %d\n", current_server_port);
 
 	// add the current socket to the poll set
 	addToPollSet(socketNum);
 
 	// can send up to 10 times
 	while (sends_attempted < 9){
+		printf("sending filename packet...\n");
 		int bytes_sent = sendtoErr(socketNum, buffer, 114, 0, (struct sockaddr *) server, serverAddrLen);
 		if (bytes_sent < 0){
 			perror("sendtoErr failed\n");
+			removeFromPollSet(socketNum);
+            close(socketNum);
 			return DONE;
 		}
  
@@ -87,26 +98,29 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 			//open a new socket, send on the new one
 			removeFromPollSet(socketNum);
 			close(socketNum);
-			socketNum = setupUdpClientToServer(&server, params.remote_machine, params.remote_port);
+			socketNum = setupUdpClientToServer(server, params.remote_machine, current_server_port);
 			//!do i need to re-add it, wont it just do this at the top?
-			//addToPollSet(socketNum);
+			addToPollSet(socketNum);
 
 			sends_attempted++;
-			return SEND_FILENAME;
+			continue;
 		}
 		// now the case that the timer has NOT expired
 		// it returned a valid socket to read so its going to recieve data
 		// after it receives it and the flag is the filename ack flag it will go to get data state
 		else {
-			int recieved = recvfrom(socketNum, recv_buffer, MAXBUF, 0, (struct sockaddr *) server, &serverAddrLen);
+			int recieved = recvfrom(socketNum, recv_buffer, ACK_BUFF_SIZE, 0, (struct sockaddr *) server, &serverAddrLen);
 			
 			if (recieved < 0) {
             	perror("recvfrom failed");
+				removeFromPollSet(socketNum);
+            	close(socketNum);
             	return DONE;
         	}
 			//check if it was a filename ack
 			// the flag should be byte 7 of the buffer
-        	uint8_t response_flag = recv_buffer[7];
+        	uint8_t response_flag = recv_buffer[6];
+			printf("WHAT FLAG ARE WE GETTING??: %d\n", response_flag);
 
 			//if file ack receivied from server, its coming from a child 
 			//need to open a new socket to talk to the child
@@ -119,14 +133,23 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 			// reset the poll
 			// reset the counter
 			else if (response_flag == 33) { 
-				
-				int new_child_port_to_send_to =  ntohs(server->sin6_port);
+
+				//! update the global variable
+				current_server_port = ntohs(server->sin6_port);
+				printf("WHAT IS THE CURRENT SERVER PORT: %d\n", current_server_port);
+
 				printf("got the 'talk to here now' packet. redirecting to child server\n");
-				printf("New child server port received: %d\n", new_child_port_to_send_to);
+				printf("New child server port received: %d\n", current_server_port);
 
-				socketNum = setupUdpClientToServer(&server, params.remote_machine, new_child_port_to_send_to);
-
-            	return SEND_FILENAME;
+				removeFromPollSet(socketNum);
+            	close(socketNum);
+				socketNum = setupUdpClientToServer(server, params.remote_machine, current_server_port);
+				printf("now sending with this socketNum: %d\n", socketNum);
+				addToPollSet(socketNum);
+				// reset the timer and the sends, resend to the new socket
+				sends_attempted = 0;
+				timeout = 1000; 
+            	continue; 
         	} 
 			else {
 				// if the response flag is 32, then I know there is an error, and I move to DONE
@@ -136,6 +159,7 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
     	}
 	}
 	//the case where the sends_attempted are greater than 9
+	removeFromPollSet(socketNum);
 	return DONE;
 }
 

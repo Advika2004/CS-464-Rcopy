@@ -28,6 +28,7 @@
 #define MAX_WINDOW_LEN 4
 #define MAX_BUFFER_LEN 2
 #define MAX_HEADER_LEN 7
+#define ACK_BUFF_SIZE 7
 
 //! should this be some length? is it specified somwhere
 #define MAX_REMOTE_MACHINE 256 
@@ -61,4 +62,4 @@ void doDoneState(int socketNum, FILE *destFile);
 FILE *curr_file_open;
 
 // make it a global, upon start this is the one given by the command line
-int socketNum = 0;				
+int current_server_port;

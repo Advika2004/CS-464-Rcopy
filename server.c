@@ -7,9 +7,9 @@ typedef enum {
 	INIT,
     GET_FILENAME,
     DONE,
-    SEND_DATA,
-    WAIT_ON_ACK,
-	WAIT_ON_EOF_ACK
+    // SEND_DATA,
+    // WAIT_ON_ACK,
+	// WAIT_ON_EOF_ACK
 } state;
 
 int main ( int argc, char *argv[]  )
@@ -30,7 +30,7 @@ int main ( int argc, char *argv[]  )
 
 	uint8_t buffer[114];	  
 	struct sockaddr_in6 client;		
-	socklen_t clientAddrLen = sizeof(client);	
+	socklen_t clientAddrLen = sizeof(struct sockaddr_in6);	
 
 	// will extract the values from the client and store it in here
 	char filename[MAX_FILENAME_LEN];
@@ -59,11 +59,10 @@ int main ( int argc, char *argv[]  )
 	uint16_t result = calculateFilenameChecksumFILENAME(buffer);
 	printf("result from checksum: %d\n", result);
 	if (result != 0){
-		printf("bad checksum\n");
+		printf("bad checksum in parent\n");
 		continue;
 	}
 	else{
-		printf("REACHING HERE\n");
 		// can proceed to extract the correct info
 		memcpy(filename, buffer + 7, MAX_FILENAME_LEN);
 		memcpy(&buffer_size, buffer + 107, 2);
@@ -97,7 +96,7 @@ uint16_t calculateFilenameChecksumFILENAME(uint8_t* buffer){
 }
 
 
-void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6 * client, int clientAddrLen, int main_server_socket){
+void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6 * client, socklen_t clientAddrLen, int main_server_socket){
 	int state;
 
 	printf("[SERVER] Received filename request: %s\n", filename);
@@ -141,8 +140,16 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
 		}
 
 		// Send the "talk to here" packet
-		int bytes_sent = sendtoErr(child_server_socket, talk_buff_send, 8, 0,
-                           (struct sockaddr*)&client, clientAddrLen);
+		//safeSendto(socketNum, buffer, strlen(buffer)+1, 0, (struct sockaddr *) & client, clientAddrLen);
+		int bytes_sent = sendtoErr(child_server_socket, talk_buff_send, 7, 0,
+                           (struct sockaddr*) client, clientAddrLen);
+		printf("Sent PDU Buffer (Hex): ");
+		int i;
+		for (i = 0; i < 7; i++) { // Print first 20 bytes
+    	printf("%02X ", talk_buff_send[i]);
+		}
+		printf("\n");
+		printf("bytes sent: %d\n", bytes_sent);
 		if (bytes_sent < 0) {
     		perror("sendtoErr failed\n");
     		state = DONE;
@@ -157,24 +164,25 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
         switch (state) {
             case GET_FILENAME:
 				printf("made it to the opening file state\n");
-                //state = doGetFilenameState(filename);
+				printf("ok now in here I can try and open the file and send the ack packet");
+                state = doGetFilenameState(client, clientAddrLen, main_server_socket);
                 break;
             case DONE:
-                printf("h");
-                //state = doDoneState();
+                printf("DONE\n");
+                state = doDoneState();
                 break;
-            case SEND_DATA:
-                printf("h");
-                //state = doSendDataState();
-                break;
-            case WAIT_ON_ACK:
-                printf("h");
-				//state = doWaitOnAckState();
-                break;
-			case WAIT_ON_EOF_ACK:
-                printf("h");
-				//state = doWaitOnEOFAckState();
-                break;
+            // case SEND_DATA:
+            //     printf("send data\n");
+            //     //state = doSendDataState();
+            //     break;
+            // case WAIT_ON_ACK:
+            //     printf("waiting on ack\n");
+			// 	//state = doWaitOnAckState();
+            //     break;
+			// case WAIT_ON_EOF_ACK:
+            //     printf("waiting on eof ack\n");
+			// 	//state = doWaitOnEOFAckState();
+            //     break;
         }
     }
 }
@@ -182,33 +190,75 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
 
 
 
-// int doGetFilenameState(char* filename) {
+int doGetFilenameState(struct sockaddr_in6* client, socklen_t clientAddrLen, int main_server_socket) {
 
-// 	curr_file_open = fopen(filename, "rb");
+	//re-read out the filename packet
+	char filename[MAX_FILENAME_LEN];
+	uint16_t buffer_size = 0;
+	uint32_t window_size = 0;
 
-// 	if (curr_file_open == NULL){
-// 		perror("Couldn't open file\n");
+	uint8_t buffer[114];	  
+	//struct sockaddr_in6 client;		
+	//socklen_t clientAddrLen = sizeof(struct sockaddr_in6);
 
-// 		// make the packet for the correct ack
-// 		uint8_t temp_buff = makeVALIDFilenameACKBeforeChecksum();
-// 		uint16_t calculated_checksum = calculateFilenameChecksum(temp_buff);
-// 		uint8_t ack_buff_send = makeFilenameACKAfterChecksum(temp_buff, calculated_checksum);
+	//receive the filename packet again from the server
+	//take in the filename packet from the client
+    int recv_len = recvfrom(main_server_socket, buffer, 114, 0, (struct sockaddr*)&client, &clientAddrLen);
+    if (recv_len < 0) {
+        perror("recvfrom failed");
+        return 0;
+    }
 
-// 		uint16_t result = calculateFilenameChecksum(buffer_to_send);
-// 		if (result == 0){
-// 			printf("checksum calculated right: %d\n", result);
-// 		}
-// 		else{
-// 			printf("checksum not right\n");
-// 			exit(1);
-// 		}
+	//calculate the checksum and see if its valid 
+	uint16_t result = calculateFilenameChecksumFILENAME(buffer);
+	printf("result from checksum: %d\n", result);
+	if (result != 0){
+		printf("child bad checksum\n");
+		return DONE;
+	}
+	// can proceed to extract the correct info
+	memcpy(filename, buffer + 7, MAX_FILENAME_LEN);
+	memcpy(&buffer_size, buffer + 107, 2);
+	uint16_t host_buffer_size = ntohs(buffer_size);
+	memcpy(&window_size, buffer + 109, 4);
+	uint16_t host_window_size = ntohl(window_size);
 
-// 		//!send the packet
+	//!DEBUG: add print statements to check that it was read out properly
+	printf("checksum calculated right: %d\n", result);
 
-// 		// must send error ack packet 
+	printf("Extracted Filename: %s\n", filename);
+	printf("Extracted Buffer Size: %u bytes\n", host_buffer_size);
+	printf("Extracted Window Size: %u packets\n", host_window_size);
+		
+	return DONE;
 
-// 		return DONE;
-// 	}
+	}
+
+	// // try and open the file given, if possible then send back the yes ack packet and move to sending data
+	// // if not, send back the no ack packet and move to DONE
+	// curr_file_open = fopen(filename, "rb");
+
+	// if (curr_file_open == NULL){
+	// 	perror("Couldn't open file\n");
+
+	// 	// make the packet for the correct ack
+	// 	uint8_t temp_buff = makeVALIDFilenameACKBeforeChecksum();
+	// 	uint16_t calculated_checksum = calculateFilenameChecksum(temp_buff);
+	// 	uint8_t ack_buff_send = makeFilenameACKAfterChecksum(temp_buff, calculated_checksum);
+
+	// 	uint16_t result = calculateFilenameChecksum(buffer_to_send);
+	// 	if (result == 0){
+	// 		printf("checksum calculated right: %d\n", result);
+	// 	}
+	// 	else{
+	// 		printf("checksum not right\n");
+	// 		exit(1);
+	// 	}
+
+	// 	//!send the packet
+
+	// 	// must send error ack packet 
+
 
 // 	// else send the right ack packet 
 // 	// send back the flag 32 error ack packet
@@ -232,9 +282,12 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
 // 	return SEND_DATA_STATE
 
 // }
-// int doDoneState() {
-// 	return 0;
-// }
+
+
+int doDoneState() {
+	exit(1);
+}
+
 // int doSendDataState() {
 // 	return 0;
 // }
