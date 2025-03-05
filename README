@@ -125,6 +125,7 @@ SERVER AGAIN:
 - FSM: 
 - GET_FILENAME:
     - fork off a server child
+        - immedately send a hello talk to here packet to the client (flag = 33) 
     - parent goes back to waiting for new clients
     - child process will try and open the filename
     - if it works, then calcualte the right valid ack packet and send that back to client 

@@ -220,9 +220,13 @@ uint8_t* makeFilenamePDUBeforeChecksum(RcopyParams params){
 
 	memcpy(buffer + 7, &params.src_filename, 100);
 
-	memcpy(buffer + 107, &params.buffer_size, 2);
+	uint16_t netowrk_buffer_size = htons(params.buffer_size);
 
-	memcpy(buffer + 109, &params.window_size, 4);
+	memcpy(buffer + 107, &netowrk_buffer_size, 2);
+
+	uint32_t netowrk_window_size = htons(params.window_size);
+
+	memcpy(buffer + 109, &netowrk_window_size, 4);
 
     return buffer;
 }
