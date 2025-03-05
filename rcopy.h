@@ -59,3 +59,6 @@ void doDoneState(int socketNum, FILE *destFile);
 
 //global to hold the current file that is open
 FILE *curr_file_open;
+
+// make it a global, upon start this is the one given by the command line
+int socketNum = 0;				

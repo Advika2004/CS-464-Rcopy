@@ -1,4 +1,6 @@
 #include "rcopy.h"
+
+
 typedef enum {
     SEND_FILENAME,
     FILE_VALID,
@@ -7,7 +9,8 @@ typedef enum {
 } state;
 
 int main (int argc, char *argv[])
- {	
+ {
+	int socketNum = 0;				
 	struct sockaddr_in6 server;		// Supports 4 and 6 but requires IPv6 struct
 	int state = SEND_FILENAME;
 
@@ -18,7 +21,7 @@ int main (int argc, char *argv[])
 	socketNum = setupUdpClientToServer(&server, params.remote_machine, params.remote_port);
 
 	//need to call this here bcasue need to call this before calling sendErr?
-	sendErr_init(params.error_rate, DROP_ON, FLIP_OFF, DEBUG_OFF, RSEED_OFF);
+	sendErr_init(params.error_rate, DROP_ON, FLIP_OFF, DEBUG_ON, RSEED_OFF);
 
 	uint8_t* buffer = makeFilenamePDUBeforeChecksum(params);
 	uint16_t calculated_checksum = calculateFilenameChecksum(buffer);
@@ -61,7 +64,6 @@ int main (int argc, char *argv[])
 	return 0;
 }
 
-
 int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 * server, uint8_t* buffer){
 	socklen_t serverAddrLen = sizeof(struct sockaddr_in6);
 	uint8_t recv_buffer[MAXBUF];
@@ -87,7 +89,7 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 			//open a new socket, send on the new one
 			removeFromPollSet(socketNum);
 			close(socketNum);
-			socketNum = setupUdpClientToServer(&server, params.remote_machine, params.remote_port);
+			socketNum = setupUdpClientToServer(server, params.remote_machine, params.remote_port);
 			//!do i need to re-add it, wont it just do this at the top?
 			//addToPollSet(socketNum);
 
@@ -105,31 +107,26 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
             	return DONE;
         	}
 			//check if it was a filename ack
-			// the flag should be byte 7 of the buffer
-        	uint8_t response_flag = recv_buffer[7];
+        	uint8_t response_flag = recv_buffer[0];
 
 			//if file ack receivied from server, its coming from a child 
 			//need to open a new socket to talk to the child
-        	if (response_flag == 9) {
+        	if (response_flag == 9) { 
+
+				uint16_t newPort;
+				//!add a check here to make sure the new port gets read out properly
+            	memcpy(&newPort, recv_buffer + 1, 2);
+            	newPort = ntohs(newPort);
+
+				close(socketNum);
+
+				socketNum = setupUdpClientToServer(server, params.remote_machine, newPort);
+
+				addToPollSet(socketNum);
 
             	return FILE_VALID;
         	} 
-			// if the response is a "talk to here now" packet
-			// stop talking to the main server and redirect all communication to this new port
-			// reset the poll
-			// reset the counter
-			else if (response_flag == 33) { 
-				
-				int new_child_port_to_send_to =  ntohs(server->sin6_port);
-				printf("got the 'talk to here now' packet. redirecting to child server\n");
-				printf("New child server port received: %d\n", new_child_port_to_send_to);
-
-				socketNum = setupUdpClientToServer(&server, params.remote_machine, new_child_port_to_send_to);
-
-            	return SEND_FILENAME;
-        	} 
 			else {
-				// if the response flag is 32, then I know there is an error, and I move to DONE
             	removeFromPollSet(socketNum);
             	return DONE;
         	}
@@ -195,12 +192,12 @@ void printFilenamePDU(uint8_t *buffer) {
 
     // Print values
     printf("------ Filename PDU ------\n");
-    printf("Sequence Number: %u\n", ntohl(seqNum));
+    printf("Sequence Number: %u\n", seqNum);
     printf("Checksum: 0x%04x\n", checksum);
     printf("Flag: %u\n", flag);
     printf("Filename: %s\n", filename);
-    printf("Buffer Size: %u\n", ntohs(bufferSize));
-    printf("Window Size: %u\n", ntohl(windowSize));
+    printf("Buffer Size: %u\n", bufferSize);
+    printf("Window Size: %u\n", windowSize);
     printf("--------------------------\n");
 }
 
@@ -227,7 +224,7 @@ uint8_t* makeFilenamePDUBeforeChecksum(RcopyParams params){
 
 	memcpy(buffer + 107, &netowrk_buffer_size, 2);
 
-	uint32_t netowrk_window_size = htonl(params.window_size);
+	uint32_t netowrk_window_size = htons(params.window_size);
 
 	memcpy(buffer + 109, &netowrk_window_size, 4);
 
@@ -249,6 +246,31 @@ uint8_t* makeFilenamePDUAfterChecksum(uint8_t* buffer, uint16_t calculated_check
     memcpy(buffer + 4, &calculated_checksum, 2);
 
     return buffer;
+}
+
+int readFromStdin(char * buffer)
+{
+	char aChar = 0;
+	int inputLen = 0;        
+	
+	// Important you don't input more characters than you have space 
+	buffer[0] = '\0';
+	printf("Enter data: ");
+	while (inputLen < (MAXBUF - 1) && aChar != '\n')
+	{
+		aChar = getchar();
+		if (aChar != '\n')
+		{
+			buffer[inputLen] = aChar;
+			inputLen++;
+		}
+	}
+	
+	// Null terminate the string
+	buffer[inputLen] = '\0';
+	inputLen++;
+	
+	return inputLen;
 }
 
 // checks the arguments to the client program and 
@@ -279,11 +301,11 @@ RcopyParams checkArgs(int argc, char * argv[])
 
 	// if they are valid, then put them into the struct
 
-	strncpy(parameters.src_filename, argv[1], MAX_FILENAME_LEN);
-    parameters.src_filename[MAX_FILENAME_LEN] = '\0';
+	strncpy(parameters.src_filename, argv[1], MAX_FILENAME_LEN - 1);
+    parameters.src_filename[MAX_FILENAME_LEN - 1] = '\0';
 
-	strncpy(parameters.dest_filename, argv[1], MAX_FILENAME_LEN);
-    parameters.dest_filename[MAX_FILENAME_LEN] = '\0';
+	strncpy(parameters.dest_filename, argv[2], MAX_FILENAME_LEN - 1);
+    parameters.dest_filename[MAX_FILENAME_LEN - 1] = '\0';
 
 	parameters.window_size = atoi(argv[3]);
 	parameters.buffer_size = atoi(argv[4]);
@@ -305,6 +327,15 @@ RcopyParams checkArgs(int argc, char * argv[])
 
 	return parameters;
 }
+
+
+
+
+
+
+
+
+
 
 
 // void talkToServer(int socketNum, struct sockaddr_in6 * server)
@@ -332,27 +363,5 @@ RcopyParams checkArgs(int argc, char * argv[])
 // 	}
 // }
 
-int readFromStdin(char * buffer)
-{
-	char aChar = 0;
-	int inputLen = 0;        
-	
-	// Important you don't input more characters than you have space 
-	buffer[0] = '\0';
-	printf("Enter data: ");
-	while (inputLen < (MAXBUF - 1) && aChar != '\n')
-	{
-		aChar = getchar();
-		if (aChar != '\n')
-		{
-			buffer[inputLen] = aChar;
-			inputLen++;
-		}
-	}
-	
-	// Null terminate the string
-	buffer[inputLen] = '\0';
-	inputLen++;
-	
-	return inputLen;
-}
+
+
