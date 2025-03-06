@@ -133,3 +133,10 @@ SERVER AGAIN:
     - if it doesnt work then send the error packet back
         - move to the DONE state
     - thats it for now, the rest of the states will be implemented with sliding window
+
+
+
+    couple issues:
+    - the filename is not being read out right
+    - moving to the DONE state and ending is not happening it keeps going back up to the top of something and continuing 
+    

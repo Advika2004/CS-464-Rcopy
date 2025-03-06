@@ -18,9 +18,9 @@ int main (int argc, char *argv[])
 
 	//! global that holds the main server upon start
 	//! when we start this is where we are talking to
-	current_server_port = params.remote_port;
+	main_server_port = params.remote_port;
 	
-	socketNum = setupUdpClientToServer(&server, params.remote_machine, current_server_port);
+	socketNum = setupUdpClientToServer(&server, params.remote_machine, main_server_port);
 	printf("first send with this socketNum: %d\n", socketNum);
 
 	//need to call this here bcasue need to call this before calling sendErr?
@@ -50,11 +50,11 @@ int main (int argc, char *argv[])
                 state = doSendFilenameState(params, socketNum, &server, buffer_to_send);
                 break;
             case FILE_VALID:
-                printf("h");
-                state = doFileValidState(params);
+                printf("checking if file can be opened\n");
+                state = doFileValidState(params, socketNum, &server, buffer_to_send);
                 break;
             case GET_DATA:
-                printf("h");
+                printf("heyyyyy can get data now!!!");
                 state = doGetDataState();
                 break;
             case DONE:
@@ -75,7 +75,7 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 	int timeout = 1000; //need it to be one second 
 	int poll; //make a socket to recieve on ? 
 
-	printf("WHAT IS THE CURRENT SERVER PORT: %d\n", current_server_port);
+	printf("WHAT IS THE CURRENT SERVER PORT: %d\n", main_server_port);
 
 	// add the current socket to the poll set
 	addToPollSet(socketNum);
@@ -83,6 +83,12 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 	// can send up to 10 times
 	while (sends_attempted < 9){
 		printf("sending filename packet...\n");
+		printf("the buffer that is being sent: ");
+		int i;
+    	for (i = 0; i < 114; i++) {
+        	printf("%02X ", buffer[i]);
+    	}
+    	printf("\n");
 		int bytes_sent = sendtoErr(socketNum, buffer, 114, 0, (struct sockaddr *) server, serverAddrLen);
 		if (bytes_sent < 0){
 			perror("sendtoErr failed\n");
@@ -90,17 +96,23 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
             close(socketNum);
 			return DONE;
 		}
+
+
+		struct sockaddr_in6 client_addr;
+		socklen_t client_addr_len = sizeof(client_addr);
+		getsockname(socketNum, (struct sockaddr *)&client_addr, &client_addr_len);
+
+		char client_ip_str[INET6_ADDRSTRLEN];
+		inet_ntop(AF_INET6, &client_addr.sin6_addr, client_ip_str, sizeof(client_ip_str));
+
+		printf("Client is listening on IP FOR 33 PACKET: %s, Port: %d\n", client_ip_str, ntohs(client_addr.sin6_port));
+
  
 		poll = pollCall(timeout);
 		if (poll == -1){
 			//that means the timeout expired so need to resend 
 			//close the current socket
 			//open a new socket, send on the new one
-			removeFromPollSet(socketNum);
-			close(socketNum);
-			socketNum = setupUdpClientToServer(server, params.remote_machine, current_server_port);
-			//!do i need to re-add it, wont it just do this at the top?
-			addToPollSet(socketNum);
 
 			sends_attempted++;
 			continue;
@@ -110,7 +122,9 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 		// after it receives it and the flag is the filename ack flag it will go to get data state
 		else {
 			int recieved = recvfrom(socketNum, recv_buffer, ACK_BUFF_SIZE, 0, (struct sockaddr *) server, &serverAddrLen);
-			
+			printf("WHAT IS THE CURRENT SERVER PORT after recieving: %d\n", ntohs(server->sin6_port));
+
+			printf("Client is receiving on: %d\n", socketNum);
 			if (recieved < 0) {
             	perror("recvfrom failed");
 				removeFromPollSet(socketNum);
@@ -122,65 +136,128 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
         	uint8_t response_flag = recv_buffer[6];
 			printf("WHAT FLAG ARE WE GETTING??: %d\n", response_flag);
 
-			//if file ack receivied from server, its coming from a child 
-			//need to open a new socket to talk to the child
-        	if (response_flag == 9) {
-
-            	return FILE_VALID;
-        	} 
 			// if the response is a "talk to here now" packet
 			// stop talking to the main server and redirect all communication to this new port
 			// reset the poll
 			// reset the counter
-			else if (response_flag == 33) { 
+			if (response_flag == 33) { 
 
 				//! update the global variable
 				current_server_port = ntohs(server->sin6_port);
+            	server->sin6_port = htons(current_server_port);
+
 				printf("WHAT IS THE CURRENT SERVER PORT: %d\n", current_server_port);
 
 				printf("got the 'talk to here now' packet. redirecting to child server\n");
 				printf("New child server port received: %d\n", current_server_port);
 
-				removeFromPollSet(socketNum);
-            	close(socketNum);
-				socketNum = setupUdpClientToServer(server, params.remote_machine, current_server_port);
-				printf("now sending with this socketNum: %d\n", socketNum);
-				addToPollSet(socketNum);
-				// reset the timer and the sends, resend to the new socket
-				sends_attempted = 0;
-				timeout = 1000; 
-            	continue; 
+				// it now knows where to communicate to. move onto getting data from there
+				return FILE_VALID;
         	} 
 			else {
-				// if the response flag is 32, then I know there is an error, and I move to DONE
+				// if the first response from the server isnt telling me to talk to a child, something is wrong and abort
             	removeFromPollSet(socketNum);
+				close(socketNum);
             	return DONE;
         	}
     	}
 	}
 	//the case where the sends_attempted are greater than 9
 	removeFromPollSet(socketNum);
+	close(socketNum);
 	return DONE;
 }
 
-int doFileValidState(RcopyParams params){
-	curr_file_open = fopen(params.dest_filename, "wb");
+//choosing to handle the ack packets from the child server in here
+// this function will also check if the destination file can be opened or not? 
+int doFileValidState(RcopyParams params, int socketNum, struct sockaddr_in6 * server, uint8_t* buffer){
 
-	if (curr_file_open == NULL){
-		perror("Couldn't open file\n");
+	//socklen_t serverAddrLen = sizeof(struct sockaddr_in6);
+	uint8_t recv_buffer[ACK_BUFF_SIZE];
+
+	//first check if the destination file to write to can be opened
+	int result = checkDestFile(params);
+	if (result == 0){
 		return DONE;
 	}
 
-	//!do i need to re-add it, wont it just do this at the top?
-	//addToPollSet(socketNum);
+	//now want to poll and wait for the server to send the ack packet
+	//keep polling for the ack packets
+	int new_poll = 1;
+	int retries = 0; 
+	int timeout = 1000;
+	
 
-	return GET_DATA;
+	while (retries < 9){
+		printf("new_poll before pollCall: %d\n", new_poll);
+
+
+		struct sockaddr_in6 client_addr;
+		socklen_t client_addr_len = sizeof(client_addr);
+		getsockname(socketNum, (struct sockaddr *)&client_addr, &client_addr_len);
+
+		char client_ip_str[INET6_ADDRSTRLEN];
+		inet_ntop(AF_INET6, &client_addr.sin6_addr, client_ip_str, sizeof(client_ip_str));
+
+		printf("Client is listening on IP: %s, Port: %d\n", client_ip_str, ntohs(client_addr.sin6_port));
+
+
+
+		new_poll = pollCall(timeout);
+		printf("new_poll after pollCall: %d\n", new_poll);
+		if (new_poll != -1){
+			printf("polling again\n");
+			socklen_t serverAddrLen = sizeof(*server);
+
+			int second_recieved = recvfrom(socketNum, recv_buffer, ACK_BUFF_SIZE, 0, (struct sockaddr *) server, &serverAddrLen);
+
+			if (second_recieved < 0) {
+            	perror("recvfrom failed");
+				//! do i end here? what do I do? 
+				continue;
+        	}
+
+			//check if it was a filename ack
+			// the flag should be byte 7 of the buffer
+       		uint8_t response_flag = recv_buffer[6];
+			printf("WHAT FLAG ARE WE GETTING NOWWW??: %d\n", response_flag);
+
+
+			//now wait on the server child to try and open the file and send an ack packet
+        	if (response_flag == 9) {
+				printf("file was openable\n");
+            	return GET_DATA;
+        	} 
+        	else if (response_flag == 32) {
+				printf("file was not openable\n");
+            	removeFromPollSet(socketNum);
+            	return DONE;
+        	} 
+		}
+		// if the polling does not work, try again and keep count 
+		else{
+			printf("polling timed out, incrementing count\n");
+			retries++;
+		}
+	}
+    printf("Max retries reached. Resending filename.\n");
+    return SEND_FILENAME;
+}
+
+int checkDestFile(RcopyParams params){
+	FILE* file_opened = fopen(params.dest_filename, "wb");
+
+	if (file_opened == NULL){
+		perror("Couldn't open file\n");
+		return 0;
+	}
+
+	return 1;
 }
 
 int doGetDataState(){
-	//- do nothing here for now, will implement this when we get into the sliding window? 
-    //- need to do sliding window for client and server?
-	printf("reached get data state\n");
+	//poll and wait on the ack packets from the server, here, then continue to sliding window.
+	printf("within the get data state\n");
 	return DONE;
 }
 

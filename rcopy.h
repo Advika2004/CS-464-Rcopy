@@ -54,12 +54,14 @@ uint16_t calculateFilenameChecksum(uint8_t* buffer);
 uint8_t* makeFilenamePDUAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);
 void printFilenamePDU(uint8_t *buffer);
 int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 * server, uint8_t* buffer);
-int doFileValidState(RcopyParams params);
+int doFileValidState(RcopyParams params, int socketNum, struct sockaddr_in6 * server, uint8_t* buffer);
 int doGetDataState();
+int checkDestFile(RcopyParams params);
 void doDoneState(int socketNum, FILE *destFile);
 
 //global to hold the current file that is open
 FILE *curr_file_open;
 
 // make it a global, upon start this is the one given by the command line
+int main_server_port;
 int current_server_port;

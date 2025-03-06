@@ -7,9 +7,9 @@ typedef enum {
 	INIT,
     GET_FILENAME,
     DONE,
-    // SEND_DATA,
-    // WAIT_ON_ACK,
-	// WAIT_ON_EOF_ACK
+    SEND_DATA,
+    WAIT_ON_ACK,
+	WAIT_ON_EOF_ACK
 } state;
 
 int main ( int argc, char *argv[]  )
@@ -54,6 +54,13 @@ int main ( int argc, char *argv[]  )
         perror("recvfrom failed");
         return 0;
     }
+
+	printf("Received in MAIN SERVER PDU Buffer (Hex): ");
+	int i;
+    for (i = 0; i < recv_len; i++) {
+        printf("%02X ", buffer[i]);
+    }
+    printf("\n");
 
 	//calculate the checksum and see if its valid 
 	uint16_t result = calculateFilenameChecksumFILENAME(buffer);
@@ -118,17 +125,18 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
 		printf("[CHILD] New child process started with PID: %d\n", getpid());
 
 		close(main_server_socket); 
+		removeFromPollSet(main_server_socket);
 			
 		// Open a new socket for communication with this client
 		//os will give it a random one
-		int child_server_socket = udpServerSetup(0);
+		child_server_socket = udpServerSetup(0);
 
 		//send the "talk to here now" packet to the client
 		uint8_t* temp_buff = makeTalkHereNowBeforeChecksum();
 		uint16_t calculated_checksum = calculateFilenameChecksumACK(temp_buff);
 		uint8_t* talk_buff_send = makeTalkHereNowAfterChecksum(temp_buff, calculated_checksum);
 
-		printTalkToHerePDU(talk_buff_send);
+		printPDU(talk_buff_send);
 
 		uint16_t result = calculateFilenameChecksumACK(talk_buff_send);
 		if (result == 0){
@@ -140,6 +148,7 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
 		}
 
 		// Send the "talk to here" packet
+		printf("sending the talk here now to client: %d\n", client->sin6_port);
 		//safeSendto(socketNum, buffer, strlen(buffer)+1, 0, (struct sockaddr *) & client, clientAddrLen);
 		int bytes_sent = sendtoErr(child_server_socket, talk_buff_send, 7, 0,
                            (struct sockaddr*) client, clientAddrLen);
@@ -164,12 +173,8 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
         switch (state) {
             case GET_FILENAME:
 				printf("made it to the opening file state\n");
-				printf("ok now in here I can try and open the file and send the ack packet");
-                state = doGetFilenameState(client, clientAddrLen, main_server_socket);
-                break;
-            case DONE:
-                printf("DONE\n");
-                state = doDoneState();
+				printf("ok now in here I can try and open the file and send the ack packet\n");
+                state = doGetFilenameState(filename, client, clientAddrLen);
                 break;
             // case SEND_DATA:
             //     printf("send data\n");
@@ -185,54 +190,97 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
             //     break;
         }
     }
+    printf("DONE\n");
+    state = doDoneState();
 }
 
 
+int doGetFilenameState(char* filename, struct sockaddr_in6 * client, socklen_t clientAddrLen) {
+	printf("filename being passed to the child server: %s\n", filename);
 
+	// try and open the file given, if possible then send back the yes ack packet and move to sending data
+	// if not, send back the no ack packet and move to DONE
+	FILE* curr_file_open = fopen(filename, "rb");
 
-int doGetFilenameState(struct sockaddr_in6* client, socklen_t clientAddrLen, int main_server_socket) {
+	if (curr_file_open == NULL){
+		perror("Couldn't open file...sending error packet\n");
 
-	//re-read out the filename packet
-	char filename[MAX_FILENAME_LEN];
-	uint16_t buffer_size = 0;
-	uint32_t window_size = 0;
+		uint8_t* temp_err_buff = makeERRORFilenameACKBeforeChecksum();
+		uint16_t calculated_checksum = calculateFilenameChecksumACK(temp_err_buff);
+		uint8_t *err_buff_send = makeFilenameACKAfterChecksum(temp_err_buff, calculated_checksum);
 
-	uint8_t buffer[114];	  
-	//struct sockaddr_in6 client;		
-	//socklen_t clientAddrLen = sizeof(struct sockaddr_in6);
+		printPDU(err_buff_send);
 
-	//receive the filename packet again from the server
-	//take in the filename packet from the client
-    int recv_len = recvfrom(main_server_socket, buffer, 114, 0, (struct sockaddr*)&client, &clientAddrLen);
-    if (recv_len < 0) {
-        perror("recvfrom failed");
-        return 0;
-    }
+		uint16_t result = calculateFilenameChecksumACK(err_buff_send);
+		if (result == 0){
+			printf("checksum calculated right: %d\n", result);
+		}
+		else{
+			printf("checksum not right\n");
+			exit(1);
+		}
 
-	//calculate the checksum and see if its valid 
-	uint16_t result = calculateFilenameChecksumFILENAME(buffer);
-	printf("result from checksum: %d\n", result);
-	if (result != 0){
-		printf("child bad checksum\n");
-		return DONE;
+		// Send the correct ack packet
+		int bytes_sent = sendtoErr(child_server_socket, err_buff_send, 7, 0,
+                        (struct sockaddr*) client, clientAddrLen);
+		printf("Sent PDU Buffer (Hex): ");
+		int i;
+		for (i = 0; i < 7; i++) { // Print first 20 bytes
+   		printf("%02X ", err_buff_send[i]);
+		}
+		printf("\n");
+		printf("bytes sent: %d\n", bytes_sent);
+		if (bytes_sent < 0) {
+    		perror("sendtoErr failed\n");
+    		return DONE;
+		}
 	}
-	// can proceed to extract the correct info
-	memcpy(filename, buffer + 7, MAX_FILENAME_LEN);
-	memcpy(&buffer_size, buffer + 107, 2);
-	uint16_t host_buffer_size = ntohs(buffer_size);
-	memcpy(&window_size, buffer + 109, 4);
-	uint16_t host_window_size = ntohl(window_size);
 
-	//!DEBUG: add print statements to check that it was read out properly
-	printf("checksum calculated right: %d\n", result);
+	//else send the correct ack packet and move to waiting for data state
+	// make the packet for the correct ack
+	uint8_t *temp_buff = makeVALIDFilenameACKBeforeChecksum();
+	uint16_t calculated_checksum = calculateFilenameChecksumACK(temp_buff);
+	uint8_t *ack_buff_send = makeFilenameACKAfterChecksum(temp_buff, calculated_checksum);
 
-	printf("Extracted Filename: %s\n", filename);
-	printf("Extracted Buffer Size: %u bytes\n", host_buffer_size);
-	printf("Extracted Window Size: %u packets\n", host_window_size);
-		
-	return DONE;
+	printPDU(ack_buff_send);
 
+	uint16_t result = calculateFilenameChecksumACK(ack_buff_send);
+	if (result == 0){
+		printf("checksum calculated right: %d\n", result);
 	}
+	else{
+		printf("checksum not right\n");
+		exit(1);
+	}
+
+	// Send the correct ack packet
+	//safeSendto(socketNum, buffer, strlen(buffer)+1, 0, (struct sockaddr *) & client, clientAddrLen);
+	int bytes_sent = sendtoErr(child_server_socket, ack_buff_send, 7, 0,
+                        (struct sockaddr*) client, clientAddrLen);
+	printf("Sent PDU Buffer (Hex): ");
+	int i;
+	for (i = 0; i < 7; i++) { // Print first 20 bytes
+    printf("%02X ", ack_buff_send[i]);
+	}
+	printf("\n");
+
+	//! debug printing within here
+	char ip_str[INET6_ADDRSTRLEN]; // Buffer to store the IP string
+
+	// Convert IPv6 address to string
+	inet_ntop(AF_INET6, &client->sin6_addr, ip_str, sizeof(ip_str));
+
+	printf("Packet sent to Client IP: %s, Port: %d\n", ip_str, ntohs(client->sin6_port));
+	//!debug printing above
+	
+	printf("bytes sent: %d\n", bytes_sent);
+	if (bytes_sent < 0) {
+    	perror("sendtoErr failed\n");
+    	return DONE;
+	}
+
+	return SEND_DATA;
+}
 
 	// // try and open the file given, if possible then send back the yes ack packet and move to sending data
 	// // if not, send back the no ack packet and move to DONE
@@ -327,43 +375,43 @@ ServerParams checkArgs(int argc, char *argv[])
 }
 
 
-// uint8_t* makeVALIDFilenameACKBeforeChecksum(){
+uint8_t* makeVALIDFilenameACKBeforeChecksum(){
 
-//     uint8_t static buffer[ACK_BUFF_SIZE];
+    uint8_t static buffer[ACK_BUFF_SIZE];
 
-// 	//chose 1 for the sequence number for acks as well
-//     uint32_t sequence_num = ntohl(1);
-//     memcpy(buffer, &sequence_num, 4);
+	//chose 1 for the sequence number for acks as well
+    uint32_t sequence_num = ntohl(1);
+    memcpy(buffer, &sequence_num, 4);
 	
-// 	//initially put checksum zerod out
-// 	uint16_t zero_checksum = 0;
-//     memcpy(buffer + 4, &zero_checksum, 2);
+	//initially put checksum zerod out
+	uint16_t zero_checksum = 0;
+    memcpy(buffer + 4, &zero_checksum, 2);
 
-// 	//flag for fileame packet is 8
-// 	uint8_t flag = 9;
-//     memcpy(buffer + 6, &flag, 1);
+	//flag for fileame packet is 8
+	uint8_t flag = 9;
+    memcpy(buffer + 6, &flag, 1);
 
-//     return buffer;
-// }
+    return buffer;
+}
 
-// uint8_t* makeERRORFilenameACKBeforeChecksum(){
+uint8_t* makeERRORFilenameACKBeforeChecksum(){
 
-//     uint8_t static buffer[ACK_BUFF_SIZE];
+    uint8_t static buffer[ACK_BUFF_SIZE];
 
-// 	//chose 1 for the sequence number for acks as well
-//     uint32_t sequence_num = ntohl(1);
-//     memcpy(buffer, &sequence_num, 4);
+	//chose 1 for the sequence number for acks as well
+    uint32_t sequence_num = ntohl(1);
+    memcpy(buffer, &sequence_num, 4);
 	
-// 	//initially put checksum zerod out
-// 	uint16_t zero_checksum = 0;
-//     memcpy(buffer + 4, &zero_checksum, 2);
+	//initially put checksum zerod out
+	uint16_t zero_checksum = 0;
+    memcpy(buffer + 4, &zero_checksum, 2);
 
-// 	//flag for fileame packet is 8
-// 	uint8_t flag = 32;
-//     memcpy(buffer + 6, &flag, 1);
+	//flag for fileame packet is 8
+	uint8_t flag = 32;
+    memcpy(buffer + 6, &flag, 1);
 
-//     return buffer;
-// }
+    return buffer;
+}
 
 uint16_t calculateFilenameChecksumACK(uint8_t* buffer){
 	uint16_t static temp_buff[8];
@@ -374,13 +422,13 @@ uint16_t calculateFilenameChecksumACK(uint8_t* buffer){
 	return calculatedChecksum;
 }
 
-// uint8_t* makeFilenameACKAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum){
+uint8_t* makeFilenameACKAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum){
 
-// 	//put in the calculated checksum
-//     memcpy(buffer + 4, &calculated_checksum, 2);
+	//put in the calculated checksum
+    memcpy(buffer + 4, &calculated_checksum, 2);
 
-//     return buffer;
-// }
+    return buffer;
+}
 
 uint8_t* makeTalkHereNowBeforeChecksum(){
 
@@ -435,7 +483,7 @@ uint8_t* makeTalkHereNowAfterChecksum(uint8_t* buffer, uint16_t calculated_check
 // }
 
 // Debug print function for "Talk to Here Now" PDU
-void printTalkToHerePDU(uint8_t *buffer) {
+void printPDU(uint8_t *buffer) {
     uint32_t seqNum;
     uint16_t checksum;
     uint8_t flag;
@@ -446,7 +494,7 @@ void printTalkToHerePDU(uint8_t *buffer) {
     memcpy(&flag, buffer + 6, 1);
 
     // Print values
-    printf("------ Talk to Here Now PDU ------\n");
+    printf("------ PDU ------\n");
     printf("Sequence Number: %u\n", ntohl(seqNum));
     printf("Checksum: 0x%04x\n", checksum);
     printf("Flag: %u\n", flag);

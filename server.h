@@ -29,15 +29,21 @@ typedef struct ServerParams{
 
 void processClient(int socketNum);
 ServerParams checkArgs(int argc, char *argv[]);
-int doGetFilenameState(struct sockaddr_in6* client, socklen_t clientAddrLen, int main_server_socket);
+int doGetFilenameState(char* filename, struct sockaddr_in6 * client, socklen_t clientAddrLen);
 int doSendDataState();
 int doDoneState();
 int doWaitOnAckState();
 int doWaitOnEOFAckState();
 void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6* client, socklen_t clientAddrLen, int main_server_socket);
 uint8_t* makeTalkHereNowBeforeChecksum();
+uint8_t* makeVALIDFilenameACKBeforeChecksum();
+uint8_t* makeFilenameACKAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);
+uint8_t* makeERRORFilenameACKBeforeChecksum();
 uint16_t calculateFilenameChecksumACK(uint8_t* buffer);
 uint8_t* makeTalkHereNowAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);
 uint16_t calculateFilenameChecksumFILENAME(uint8_t* buffer);
 
-void printTalkToHerePDU(uint8_t *buffer);
+void printPDU(uint8_t *buffer);
+
+int child_server_socket = 0;
+

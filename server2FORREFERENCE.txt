@@ -335,3 +335,62 @@ uint8_t* makeTalkHereNowAfterChecksum(uint8_t* buffer, uint16_t calculated_check
 
     return buffer;
 }
+
+
+
+
+
+
+
+________ 
+
+int doGetFilenameState(struct sockaddr_in6* client, socklen_t clientAddrLen, int child_server_socket) {
+
+	//re-read out the filename packet
+	char filename[MAX_FILENAME_LEN];
+	uint16_t buffer_size = 0;
+	uint32_t window_size = 0;
+
+	uint8_t buffer[114];	  
+	//struct sockaddr_in6 client;		
+	//socklen_t clientAddrLen = sizeof(struct sockaddr_in6);
+
+	//receive the filename packet again from the server
+	//take in the filename packet from the client
+    int recv_len = recvfrom(child_server_socket, buffer, 114, 0, (struct sockaddr*)&client, &clientAddrLen);
+    if (recv_len < 0) {
+        perror("recvfrom failed");
+        return 0;
+    }
+	// print out the buffer coming into the child in hex
+	printf("Received in CHILD PDU Buffer (Hex): ");
+	int i;
+    for (i = 0; i < recv_len; i++) {
+        printf("%02X ", buffer[i]);
+    }
+    printf("\n");
+
+	//see what is being received the second time within the child before calculating the checksum on it
+	memcpy(filename, buffer + 7, MAX_FILENAME_LEN);
+	memcpy(&buffer_size, buffer + 107, 2);
+	uint16_t host_buffer_size = ntohs(buffer_size);
+	memcpy(&window_size, buffer + 109, 4);
+	uint16_t host_window_size = ntohl(window_size);
+
+	//!DEBUG: add print statements to check that it was read out properly
+
+	printf("Extracted Filename: %s\n", filename);
+	printf("Extracted Buffer Size: %u bytes\n", host_buffer_size);
+	printf("Extracted Window Size: %u packets\n", host_window_size);
+
+	//calculate the checksum and see if its valid 
+	uint16_t result = calculateFilenameChecksumFILENAME(buffer);
+	printf("result from checksum: %d\n", result);
+	if (result != 0){
+		printf("child bad checksum\n");
+		return DONE;
+	}
+		
+	return DONE;
+
+	}
