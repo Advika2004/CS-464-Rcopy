@@ -2,6 +2,15 @@ Advika Deodhar 6pm Lab
 
 --------------------------------------------------------------------------------------------------------------
 
+
+NEEED TO IMPLEMENT STILL:
+6) If the sender is not able to open the from-file, rcopy should print out the error message: Error: file <fromfilename> not found. rcopy should then exit.
+7) If the receiver cannot open the to-file, rcopy should print out the error message: Error on open of output
+file: <to-filename>. 
+
+
+
+
 Readmeeee again woooooo!!! Time to read the spec
 
 Writing two programs, RCOPY and SERVER
@@ -140,3 +149,39 @@ SERVER AGAIN:
     - the filename is not being read out right
     - moving to the DONE state and ending is not happening it keeps going back up to the top of something and continuing 
     
+    Windowing:
+    - window size (W) = how many unacknowledged frams we can have (how big the buffer is on the sender)
+    - lower edge (L) = the lowest edge that has not been acknowledged
+    - upper edge (U) = one higher than the highest frame you can send 
+    - current = the frame I am sending 
+
+    - when current = upper, the window is closed
+    - when this happens, stop sending until an RR arrives
+    - when the RR arrives, L = RR number and U = L + window size
+    - window buffer must be implemneted as a 2D array on rcopy and server
+    - the window buffer can't be bigger than the window size 
+    - malloc() for them at the start of the file transfer
+    - must be implemented as a circular queue that is indexed by sequence number
+    - the window index = sequence number % window size
+    - on the server, cerate this buffer only after forking a child 
+    - on the sender, this is used for windowing
+    - on the reciever its just a buffer to store data when packets are lost 
+    - all accessor functions must be defined in separate c file
+    - can only have a max of 5 global variables in these windowing files
+    - those global variables cannot be accessed by the server or rcopy programs
+    - 
+
+    - isn't the max packet size 1407 according to the spec or is packet size something different
+    - also shouldnt the max window size be adjusted based on the command line arguments
+    - so the window initializing function should be passed in the window size and the buffer size because the server and client both know that beforehand? 
+    - can each slot in the buffer only hold one packet? 
+    - can I implement 2D arrays as structs? how are 2D arrays implemented in C?
+    - would I ever need a helper function to remove a packet from the window? 
+    - in the init function wouldnt I have to malloc for my 2D array?
+    - why would inserting it in the window mean I have to memcpy isnt it a regular array?
+    - for moving the window forward, dont I have to reset the lower edge to the RR then make the upper edge L + window size?
+    - 
+
+
+    WINDOWING CASES TO TEST FOR:
+    - window size is 3, 

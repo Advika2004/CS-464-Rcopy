@@ -125,7 +125,7 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 			printf("RECEIVING 33 port number: %d\n", ntohs(server->sin6_port));
 			char server_ip_str[INET6_ADDRSTRLEN];  // Buffer to store the IP string
 			inet_ntop(AF_INET6, &server->sin6_addr, server_ip_str, sizeof(server_ip_str));  // Convert binary IP to strin
-			printf("RECEIVING 33 address : %d\n", server_ip_str);
+			//printf("RECEIVING 33 address : %d\n", server_ip_str);
 			printf("RECEIVING 33 sending socket number: %d\n", socketNum);
 
 			printf("Client is receiving on: %d\n", socketNum);

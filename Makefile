@@ -33,6 +33,15 @@ myClient: myClient.c $(OBJS)
 myServer: myServer.c $(OBJS)
 	$(CC) $(CFLAGS) -o myServer myServer.c $(OBJS) $(LIBS)
 
+window.o: window.c window.h
+	$(CC) $(CFLAGS) -c window.c -o window.o
+
+window_test: window_test.c window.o
+	$(CC) $(CFLAGS) -o window_test window_test.c window.o -Wall -g
+
+run_tests: window_test
+	./window_test
+
 .c.o:
 	gcc -c $(CFLAGS) $< -o $@ $(LIBS)
 
@@ -40,7 +49,7 @@ cleano:
 	rm -f *.o
 
 clean:
-	rm -f myServer myClient rcopy server *.o
+	rm -f myServer myClient rcopy server window_test *.o
 
 
 

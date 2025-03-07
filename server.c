@@ -314,56 +314,6 @@ int doGetFilenameState(char* filename, struct sockaddr_in6 * client, socklen_t c
 	return SEND_DATA;
 }
 
-	// // try and open the file given, if possible then send back the yes ack packet and move to sending data
-	// // if not, send back the no ack packet and move to DONE
-	// curr_file_open = fopen(filename, "rb");
-
-	// if (curr_file_open == NULL){
-	// 	perror("Couldn't open file\n");
-
-	// 	// make the packet for the correct ack
-	// 	uint8_t temp_buff = makeVALIDFilenameACKBeforeChecksum();
-	// 	uint16_t calculated_checksum = calculateFilenameChecksum(temp_buff);
-	// 	uint8_t ack_buff_send = makeFilenameACKAfterChecksum(temp_buff, calculated_checksum);
-
-	// 	uint16_t result = calculateFilenameChecksum(buffer_to_send);
-	// 	if (result == 0){
-	// 		printf("checksum calculated right: %d\n", result);
-	// 	}
-	// 	else{
-	// 		printf("checksum not right\n");
-	// 		exit(1);
-	// 	}
-
-	// 	//!send the packet
-
-	// 	// must send error ack packet 
-
-
-// 	// else send the right ack packet 
-// 	// send back the flag 32 error ack packet
-// 	printf("checksum not right\n");
-// 	// make the packet for the correct ack
-// 	uint8_t temp_buff = makeERRORFilenameACKBeforeChecksum();
-// 	uint16_t calculated_checksum = calculateFilenameChecksum(temp_buff);
-// 	uint8_t ack_buff_send = makeFilenameACKAfterChecksum(temp_buff, calculated_checksum);
-
-// 	uint16_t result = calculateFilenameChecksum(buffer_to_send);
-// 	if (result == 0){
-// 		printf("checksum calculated right: %d\n", result);
-// 	}
-// 	else{
-// 		printf("checksum not right\n");
-// 		exit(1);
-// 	}
-
-// 	//! send the packet
-
-// 	return SEND_DATA_STATE
-
-// }
-
-
 int doDoneState(int child_server_socket) {
 	printf("[CHILD] Terminating child process with PID: %d\n", getpid());
 
@@ -501,30 +451,6 @@ uint8_t* makeTalkHereNowAfterChecksum(uint8_t* buffer, uint16_t calculated_check
     return buffer;
 }
 
-
-
-// void processClient(int socketNum)
-// {
-// 	int dataLen = 0; 
-// 	char buffer[MAXBUF + 1];	  
-// 	struct sockaddr_in6 client;		
-// 	int clientAddrLen = sizeof(client);	
-	
-// 	buffer[0] = '\0';
-// 	while (buffer[0] != '.')
-// 	{
-// 		dataLen = safeRecvfrom(socketNum, buffer, MAXBUF, 0, (struct sockaddr *) &client, &clientAddrLen);
-	
-// 		printf("Received message from client with ");
-// 		printIPInfo(&client);
-// 		printf(" Len: %d \'%s\'\n", dataLen, buffer);
-
-// 		// just for fun send back to client number of bytes received
-// 		sprintf(buffer, "bytes: %d", dataLen);
-// 		safeSendto(socketNum, buffer, strlen(buffer)+1, 0, (struct sockaddr *) & client, clientAddrLen);
-
-// 	}
-// }
 
 // Debug print function for "Talk to Here Now" PDU
 void printPDU(uint8_t *buffer) {
