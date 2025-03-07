@@ -122,7 +122,11 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 		// after it receives it and the flag is the filename ack flag it will go to get data state
 		else {
 			int recieved = recvfrom(socketNum, recv_buffer, ACK_BUFF_SIZE, 0, (struct sockaddr *) server, &serverAddrLen);
-			printf("WHAT IS THE CURRENT SERVER PORT after recieving: %d\n", ntohs(server->sin6_port));
+			printf("RECEIVING 33 port number: %d\n", ntohs(server->sin6_port));
+			char server_ip_str[INET6_ADDRSTRLEN];  // Buffer to store the IP string
+			inet_ntop(AF_INET6, &server->sin6_addr, server_ip_str, sizeof(server_ip_str));  // Convert binary IP to strin
+			printf("RECEIVING 33 address : %d\n", server_ip_str);
+			printf("RECEIVING 33 sending socket number: %d\n", socketNum);
 
 			printf("Client is receiving on: %d\n", socketNum);
 			if (recieved < 0) {
@@ -229,18 +233,30 @@ int doFileValidState(RcopyParams params, int socketNum, struct sockaddr_in6 * se
             	return GET_DATA;
         	} 
         	else if (response_flag == 32) {
-				printf("file was not openable\n");
-            	removeFromPollSet(socketNum);
-            	return DONE;
-        	} 
-		}
-		// if the polling does not work, try again and keep count 
-		else{
-			printf("polling timed out, incrementing count\n");
-			retries++;
-		}
+            printf("File is NOT valid. Sending ACK and terminating.\n");
+
+            // Create ACK packet using existing helper functions
+            uint8_t* ack_packet = makeFilenameACKBeforeChecksum(33);  // Use flag 33 for ACK
+            uint16_t calculated_checksum = calculateFilenameChecksumACK(ack_packet);
+            uint8_t* ack_packet_to_send = makeFilenameACKAfterChecksum(ack_packet, calculated_checksum);
+
+            // Send the ACK to server
+            int bytes_sent = sendtoErr(socketNum, ack_packet_to_send, ACK_BUFF_SIZE, 0, 
+                                       (struct sockaddr *)server, serverAddrLen);
+            if (bytes_sent < 0) {
+                perror("Failed to send ACK for File Not OK\n");
+            } else {
+                printf("Sent ACK for File Not OK to server on port: %d\n", ntohs(server->sin6_port));
+            }
+
+			printf("File could not be opened... terminating client\n");
+            removeFromPollSet(socketNum);
+            return DONE;
+        }
+    }
+	retries++;
 	}
-    printf("Max retries reached. Resending filename.\n");
+	printf("Max retries reached. Resending filename.\n");
     return SEND_FILENAME;
 }
 
@@ -408,30 +424,40 @@ RcopyParams checkArgs(int argc, char * argv[])
 }
 
 
-// void talkToServer(int socketNum, struct sockaddr_in6 * server)
-// {
-// 	int serverAddrLen = sizeof(struct sockaddr_in6);
-// 	char * ipString = NULL;
-// 	int dataLen = 0; 
-// 	char buffer[MAXBUF+1];
-	
-// 	buffer[0] = '\0';
-// 	while (buffer[0] != '.')
-// 	{
-// 		dataLen = readFromStdin(buffer);
+uint8_t* makeFilenameACKBeforeChecksum(uint8_t flag){
 
-// 		printf("Sending: %s with len: %d\n", buffer,dataLen);
+    uint8_t static buffer[ACK_BUFF_SIZE];
+
+	//chose 1 for the sequence number for acks as well
+    uint32_t sequence_num = ntohl(1);
+    memcpy(buffer, &sequence_num, 4);
 	
-// 		safeSendto(socketNum, buffer, dataLen, 0, (struct sockaddr *) server, serverAddrLen);
-		
-// 		safeRecvfrom(socketNum, buffer, MAXBUF, 0, (struct sockaddr *) server, &serverAddrLen);
-		
-// 		// print out bytes received
-// 		ipString = ipAddressToString(server);
-// 		printf("Server with ip: %s and port %d said it received %s\n", ipString, ntohs(server->sin6_port), buffer);
-	      
-// 	}
-// }
+	//initially put checksum zerod out
+	uint16_t zero_checksum = 0;
+    memcpy(buffer + 4, &zero_checksum, 2);
+
+	//put the right flag in there
+    memcpy(buffer + 6, &flag, 1);
+
+    return buffer;
+}
+
+uint16_t calculateFilenameChecksumACK(uint8_t* buffer){
+	uint16_t static temp_buff[8];
+	memcpy(temp_buff, buffer, 7);
+	uint8_t even_length = 0;
+	memcpy(temp_buff + 7, &even_length, 1);
+	uint16_t calculatedChecksum = in_cksum(temp_buff, sizeof(temp_buff));
+	return calculatedChecksum;
+}
+
+uint8_t* makeFilenameACKAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum){
+
+	//put in the calculated checksum
+    memcpy(buffer + 4, &calculated_checksum, 2);
+
+    return buffer;
+}
 
 int readFromStdin(char * buffer)
 {

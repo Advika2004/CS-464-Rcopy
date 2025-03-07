@@ -2,6 +2,7 @@
 /* By Hugh Smith	4/1/2017	*/
 
 #include "server.h"
+#include "cpe464.h"
 
 typedef enum {
 	INIT,
@@ -37,6 +38,7 @@ int main ( int argc, char *argv[]  )
 	uint16_t buffer_size = 0;
 	uint32_t window_size = 0;
 
+	signal(SIGCHLD, handleZombies);
 
 	while(1){
 	// need to poll forever ? so that i can manage all incoming clients?
@@ -52,7 +54,7 @@ int main ( int argc, char *argv[]  )
     int recv_len = recvfrom(main_server_socket, buffer, 114, 0, (struct sockaddr*)&client, &clientAddrLen);
     if (recv_len < 0) {
         perror("recvfrom failed");
-        return 0;
+		continue;
     }
 
 	printf("Received in MAIN SERVER PDU Buffer (Hex): ");
@@ -84,7 +86,7 @@ int main ( int argc, char *argv[]  )
 		printf("Extracted Buffer Size: %u bytes\n", host_buffer_size);
 		printf("Extracted Window Size: %u packets\n", host_window_size);
 
-		startFSM(filename, host_buffer_size, host_window_size, &client, clientAddrLen, main_server_socket);
+		startFSM(filename, host_buffer_size, host_window_size, &client, clientAddrLen, main_server_socket, serverParam);
 	}
 	}
 
@@ -103,7 +105,7 @@ uint16_t calculateFilenameChecksumFILENAME(uint8_t* buffer){
 }
 
 
-void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6 * client, socklen_t clientAddrLen, int main_server_socket){
+void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6 * client, socklen_t clientAddrLen, int main_server_socket, ServerParams serverParam){
 	int state;
 
 	printf("[SERVER] Received filename request: %s\n", filename);
@@ -122,6 +124,9 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
 	// close the main server socket since that is not used anymore in here
 	if (server_child == 0) { 
 
+		//Reinitialize sendtoErr in the child process**
+    	sendtoErr_init(serverParam.error_rate, DROP_ON, FLIP_OFF, DEBUG_OFF, RSEED_ON);
+
 		printf("[CHILD] New child process started with PID: %d\n", getpid());
 
 		close(main_server_socket); 
@@ -130,6 +135,9 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
 		// Open a new socket for communication with this client
 		//os will give it a random one
 		child_server_socket = udpServerSetup(0);
+		addToPollSet(child_server_socket);
+		printf("[CHILD] Added child server socket (%d) to poll set.\n", child_server_socket);
+
 
 		//send the "talk to here now" packet to the client
 		uint8_t* temp_buff = makeTalkHereNowBeforeChecksum();
@@ -165,7 +173,6 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
 		}
 
 		state = GET_FILENAME;
-	}
 
 	//while the state is not the done state
     while (state != DONE) {
@@ -176,22 +183,24 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
 				printf("ok now in here I can try and open the file and send the ack packet\n");
                 state = doGetFilenameState(filename, client, clientAddrLen);
                 break;
-            // case SEND_DATA:
-            //     printf("send data\n");
-            //     //state = doSendDataState();
-            //     break;
-            // case WAIT_ON_ACK:
-            //     printf("waiting on ack\n");
-			// 	//state = doWaitOnAckState();
-            //     break;
-			// case WAIT_ON_EOF_ACK:
-            //     printf("waiting on eof ack\n");
-			// 	//state = doWaitOnEOFAckState();
-            //     break;
+            case SEND_DATA:
+                printf("send data\n");
+                state = doSendDataState();
+                break;
+            case WAIT_ON_ACK:
+                printf("waiting on ack\n");
+				//state = doWaitOnAckState();
+                break;
+			case WAIT_ON_EOF_ACK:
+                printf("waiting on eof ack\n");
+				//state = doWaitOnEOFAckState();
+                break;
         }
     }
-    printf("DONE\n");
-    state = doDoneState();
+	//still within child but not in FSM ? idk what to put here
+	}
+	// if not within the child, then keep polling
+    return;
 }
 
 
@@ -203,7 +212,7 @@ int doGetFilenameState(char* filename, struct sockaddr_in6 * client, socklen_t c
 	FILE* curr_file_open = fopen(filename, "rb");
 
 	if (curr_file_open == NULL){
-		perror("Couldn't open file...sending error packet\n");
+		printf("Couldn't open file...sending error packet\n");
 
 		uint8_t* temp_err_buff = makeERRORFilenameACKBeforeChecksum();
 		uint16_t calculated_checksum = calculateFilenameChecksumACK(temp_err_buff);
@@ -220,7 +229,7 @@ int doGetFilenameState(char* filename, struct sockaddr_in6 * client, socklen_t c
 			exit(1);
 		}
 
-		// Send the correct ack packet
+		// Send the error ack packet
 		int bytes_sent = sendtoErr(child_server_socket, err_buff_send, 7, 0,
                         (struct sockaddr*) client, clientAddrLen);
 		printf("Sent PDU Buffer (Hex): ");
@@ -234,6 +243,29 @@ int doGetFilenameState(char* filename, struct sockaddr_in6 * client, socklen_t c
     		perror("sendtoErr failed\n");
     		return DONE;
 		}
+
+		//! now poll for a response from the client about the file not ok
+
+		int retries = 0;
+    	while (retries < 10) {
+			printf("child_server_socket: %d\n", child_server_socket);
+        	int poll_result = pollCall(1000);
+			printf("poll_result: %d\n", poll_result);
+        	if (poll_result != -1) {
+            	// Client responded, child can exit
+            	uint8_t recv_buffer[ACK_BUFF_SIZE];
+            	int received = recvfrom(child_server_socket, recv_buffer, ACK_BUFF_SIZE, 0, 
+                                    (struct sockaddr*) client, &clientAddrLen);
+            	if (received > 0) {
+                	printf("[CHILD] Client acknowledged error packet. Terminating.\n");
+                	return DONE;
+            	}
+        	}
+        retries++;
+    	}
+
+    	printf("[CHILD] No response after 10 tries. Terminating.\n");
+    	return DONE;
 	}
 
 	//else send the correct ack packet and move to waiting for data state
@@ -332,13 +364,25 @@ int doGetFilenameState(char* filename, struct sockaddr_in6 * client, socklen_t c
 // }
 
 
-int doDoneState() {
-	exit(1);
+int doDoneState(int child_server_socket) {
+	printf("[CHILD] Terminating child process with PID: %d\n", getpid());
+
+    //Remove the child socket from the poll set
+    removeFromPollSet(child_server_socket);
+    printf("[CHILD] Removed child socket %d from poll set.\n", child_server_socket);
+
+    //Close the child socket
+    close(child_server_socket);
+    printf("[CHILD] Closed child socket %d.\n", child_server_socket);
+
+    //Exit the child process cleanly
+    exit(0);
 }
 
-// int doSendDataState() {
-// 	return 0;
-// }
+int doSendDataState() {
+	return DONE;
+}
+
 // int doWaitOnAckState() {
 // 	return 0;
 // }
@@ -499,4 +543,11 @@ void printPDU(uint8_t *buffer) {
     printf("Checksum: 0x%04x\n", checksum);
     printf("Flag: %u\n", flag);
     printf("----------------------------------\n");
+}
+
+
+// SIGCHLD handler - cleans up terminated child processes
+void handleZombies(int sig) {
+    int stat = 0;
+    while (waitpid(-1, &stat, WNOHANG) > 0) {} // Non-blocking cleanup of all finished child processes
 }

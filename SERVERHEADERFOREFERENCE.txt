@@ -5,15 +5,16 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <bits/waitflags.h>
 #include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/wait.h> 
+#include <signal.h>
 
-#include <asm-generic/fcntl.h>
 #include "gethostbyname.h"
 #include "networks.h"
 #include "safeUtil.h"
 #include "cpe464.h"
-#include <signal.h>   //For signal() and SIGCHLD
-#include <sys/wait.h> // For waitpid()
 #include "pollLib.h"
 
 #define MAXBUF 80
@@ -37,17 +38,14 @@ int doSendDataState();
 int doDoneState();
 int doWaitOnAckState();
 int doWaitOnEOFAckState();
-void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6 * client, socklen_t clientAddrLen, int main_server_socket, ServerParams serverParam);
-uint8_t* makeTalkHereNowBeforeChecksum();
-uint8_t* makeVALIDFilenameACKBeforeChecksum();
+void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6* client, socklen_t clientAddrLen, int main_server_socket);
+uint8_t* makeFilenameACKBeforeChecksum(uint8_t flag);
 uint8_t* makeFilenameACKAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);
-uint8_t* makeERRORFilenameACKBeforeChecksum();
 uint16_t calculateFilenameChecksumACK(uint8_t* buffer);
-uint8_t* makeTalkHereNowAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);
 uint16_t calculateFilenameChecksumFILENAME(uint8_t* buffer);
-int doDoneState(int child_server_socket);
 void handleZombies(int sig);
 
 void printPDU(uint8_t *buffer);
 
 int child_server_socket = 0;
+

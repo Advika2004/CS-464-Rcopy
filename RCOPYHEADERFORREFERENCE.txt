@@ -61,6 +61,7 @@ void doDoneState(int socketNum, FILE *destFile);
 uint8_t* makeFilenameACKBeforeChecksum(uint8_t flag);
 uint16_t calculateFilenameChecksumACK(uint8_t* buffer);
 uint8_t* makeFilenameACKAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);
+int sendAckPacket(int socketNum, struct sockaddr_in6 *server, uint8_t ackFlag);
 
 //global to hold the current file that is open
 FILE *curr_file_open;
