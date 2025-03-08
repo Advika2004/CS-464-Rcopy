@@ -185,3 +185,39 @@ SERVER AGAIN:
 
     WINDOWING CASES TO TEST FOR:
     - window size is 3, 
+
+
+
+RCOPY DATA GETTING STATE MACHINE:
+3 states:
+
+IN ORDER: 
+- when the receiver gets the correct in order packets
+- stays in this state until a packet greater than expected arrives
+- highest counter = expected packet
+- each time you receive you do expected ++
+- then send an RR packet back to the sender for the expected 
+- move to buffering state if recieved > expected 
+    - need to send a SREJ packet for the expected
+    - buffer the PDU that you receive 
+    - set the highest = last received sequence number
+
+BUFFERING:
+- go here when the packet received is greater than the expected packet
+- stay here while I receive > expected 
+- keep buffering what you receive 
+- highest = received 
+- highest indcates what is the largest thing in the buffer
+- receive expected and move to flushing state
+
+FLUSHING:
+- when you receive the expected packet
+- write that one to disc
+- increment expected
+- flush the buffer
+- implement as a while loop
+    - while the sequence number = the buffer 
+- when done with flushing, go back to buffering or go to in order
+- move out of this state when while loop is over
+
+
