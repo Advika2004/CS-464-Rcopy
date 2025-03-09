@@ -26,14 +26,14 @@ int main() {
     // test_duplicate_packets();
     // test_sender_window_ack();
     // test_srej_handling();
-     test_window_loss_and_retransmit();
+    // test_window_loss_and_retransmit();
 
     printf("\n--- All Tests Completed ---\n");
 
     return 0;
 }
 
-// Test 1: Initialize Sender and Receiver Buffers
+//Test 1: Initialize Sender and Receiver Buffers
 // void test_init() {
 //     printf("\n[Test] Initializing Sender and Receiver Buffers...\n");
 

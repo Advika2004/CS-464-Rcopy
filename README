@@ -186,6 +186,25 @@ SERVER AGAIN:
     WINDOWING CASES TO TEST FOR:
     - window size is 3, 
 
+ON DA SERVER:
+- while (window is open) and not EOF
+    - open the file and read that
+    - create the PDU (add on the header)
+    - add it to the windowing buffer 
+    - send the data
+    - while Poll(0) (so poll indefinitely) (so basically while there is data to process)
+        - process the RR or the SREJ
+- while window is closed and not EOF 
+    - if poll (1 second) == true (if it doesnt time out)
+        - process the SREJ or RR
+    - else 
+        - resend lowest packet 
+
+(window closed):
+- when current = upper
+- this means that the window is full and it can't move forward until it gets an RR
+- the RR frees up space in the window and move both lower and current 
+
 
 
 RCOPY DATA GETTING STATE MACHINE:
@@ -215,9 +234,209 @@ FLUSHING:
 - write that one to disc
 - increment expected
 - flush the buffer
-- implement as a while loop
-    - while the sequence number = the buffer 
+- implement as a while loop since it is not event driven like the buffer and in order state
+    - while the sequence number = expected
+    - check valid flag??
+    (program spec says that I need to have a vlaid flag on each packet that goes into the buffer on the receiver)
+        - when making the flag initialize them all to have the valid flag off
+        - when you start adding data, turn the valid flag on
+        - when you get a peice of data, write it to the buffer, and set the valid flag
+        - when writing to disc, set the valid flag to 0 to invalidate that entry 
+        - for example if your expected is packet 2, and then you get 3 and 4. 
+        - 3 and 4 get written to the buffer
+        - 5 goes missing, but you get 6 and 7
+        - 6 and 7 get written to the buffer
+        - then 2 arrives 
+        - so now you know you need to trigger the flushing
+        - so you write 2 to disc
+        - you write 3 and 4 to disc
+        - you check that at index 5 the valid flag is not on, which means that there is no packet there
+        - so you go back to the buffering state to wait on 5 to get there. 
+        - this helps if there are holes in your window
+    - write to disc
+    - expected ++ 
 - when done with flushing, go back to buffering or go to in order
 - move out of this state when while loop is over
+- go back to the buffering state if expected < highest & packet is not valid in the buffer (valid flag off)
+    - send a SREJ for the expected, and RR for the expected
+- go back to the in-order state if the buffer is empty (expecetd = highest)
+    - increment expected 
+    - RR expected 
 
 
+
+
+
+helper functions to write: 
+- receive the packet, take out the header, and write that to disc.
+	- take in the entire buffer and the data_size from the command line argument
+	- go to the spot in the buffer where the data starts (start of packet + 7 bytes for header)
+	- start there and write the remaining data to disc
+- function to get the flag of the packet
+	- go through the packet until the flag byte (header = 4 byte sequence number, 2 byte checksum, 1 byte flag)
+	- return that flag as an int 
+- take in the received packet and parse it to remove the sequence number
+	- go through the packet until the sequence number bytes (header = 4 byte sequence number, 2 byte checksum, 1 byte flag)
+	- so take out the first 4 bytes 
+	- return that as a uint32_t
+- function to make the RR packet and function to make the SREJ packet
+	- Regarding the format for the RR and SREJ packets (it is a normal header created by the sender of the
+		RR/SREJ and then the seq number being RRed/SREJed.) This means the application PDU size for a
+		RR/SREJ packet is 11 bytes (7 bytes of header + 4 bytes for the sequence number you are
+		RR’ing/SREJ’ing). The seq number being RR/SREJ must be in network order.
+		 RR PDU format: Packet Seq number, checksum, flag, RR seq number (what you are RRing)2
+		 SREJ PDU format: Packet Seq number, checksum, flag, SREJ seq number (what you are SREJing) 
+		a. Flag < 32 if not specified in this list cannot be used, if you create your own flag use ≥ 32
+b. Flag = 5 RR packet
+c. Flag = 6 SREJ packet
+d. Flag = 8 Packet contains the file name/buffer-size/window-size (rcopy to server)
+e. Flag = 9 Packet contains the response to the filename packet (server to rcopy)
+f. Flag = 10 Packet is your EOF indication or is the last data packet (sender to receiver)
+g. Flag = 16 Regular data packet
+
+
+?? what are flag 17 and 18 used for?? ?? where to implement that? done in server (treat them the same as data in receiver)
+h. Flag = 17 Resent data packet (after sender receiving a SREJ, not a timeout)
+i. Flag = 18 Resent data packet after a timeout (so lowest in window resent data packet.)
+j. Flag ≥ 32 If you wish/need to create other flags use ≥ 32 
+
+implement this later within the server
+- function to make the data packet
+	- what is the best way to do this? 
+		- either read through the entire file and make packets for all of them and store that into an array of packet pointers that is as large as the file needs
+		- or keep a global pointer to where you are in the file, and each time you need to send another packet, move the pointer data_size forward to make the packet 
+		- do this until you reach EOF
+	- data packet PDU structure = (header = 4 byte sequence number, 2 byte checksum, 1 byte flag) + data_size amount of data in bytes
+		- provided by the command line arguments. ServerParams.data_size
+
+//questions:
+- if I make a packet struct like this: 
+//Struct for the packet
+typedef struct Packet{
+    uint32_t sequence_number; 
+    uint16_t checksum;
+    uint8_t flag;
+    uint8_t data[1400]; 
+} Packet;
+- then I make the incoming packet pointer point to the packet struct would it allow me to use the struct fields? the buffer I make the pointers the same for should have the data starting at those different points
+- or would i have to memcpy them into the struct? 
+
+
+
+
+
+
+
+
+int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams params){
+
+	// start with the state being in_order
+	// move to buffering and flushing within the functions written for each state 
+	// open the destination file for writing
+	// create the receiver buffer 
+	// poll to receive data
+	// take out the flag part of the packet 
+	// pass entire received packet to the next functions 
+
+	// if receive the EOF, then send the EOF ack
+	// then close the file 
+	// move to the done state 
+
+	// if poll times out 
+	// print an error
+	// move to the done state 
+
+
+	static ReceiveState subState = IN_ORDER;   // or local variable
+    int doneReceiving = 0;
+
+    // Possibly create or open your output file here if not already done
+    FILE *fp = fopen(params.dest_filename, "ab"); 
+    if (!fp) {
+        perror("Failed to open output file in GET_DATA");
+        return DONE; // or handle error
+    }
+
+    // Initialize your ReceiverBuffer (sliding-window buffer) 
+    ReceiverBuffer* rbuf = initReceiverBuffer(params.buffer_size, params.window_size);
+
+    while (!doneReceiving) {
+        // 1) poll() for the socket
+        int pollResult = pollCall(1000); // or your chosen timeout
+        if (pollResult > 0) {
+            // 2) recvfrom() to get the incoming data packet
+            Packet incomingPkt;
+            struct sockaddr_in6 fromAddr;
+            socklen_t fromLen = sizeof(fromAddr);
+
+            int bytes = recvfrom(socketNum, &incomingPkt, sizeof(incomingPkt), 0,
+                                 (struct sockaddr*)&fromAddr, &fromLen);
+
+            if (bytes > 0) {
+                // 3) Dispatch to your sub-state handler
+                subState = handleDataPacket(rbuf, &incomingPkt, fp, subState);
+
+                // 4) Check if this packet signals EOF or if we otherwise know we’re done
+                //    e.g. If your flag=10 indicates last data packet.
+                if (/* check if it's EOF or last data packet + fully flushed */) {
+                    doneReceiving = 1;
+                }
+
+            } else {
+                // recvfrom() error or zero => handle or break
+            }
+        } 
+        else {
+            // poll timed out => handle timeouts, possibly re-SREJ or re-RR
+        }
+    }
+
+    // Clean up
+    freeReceiverBuffer(rbuf);
+    fclose(fp);
+
+    return DONE;  // once you finish, go back to main loop -> transitions to DONE
+}
+
+//should take in the incoming packet, the buffer struct, and destination file
+int doInOrderState(){
+	// set the expected counter at 0
+	// parse the received packet 
+	// check if the expected packet matches the sequence number of the received packet 
+	// call makeRRpacket
+	// send the RR packet for the packet just received 
+	// increment expected
+	// if the received sequence number > expected number, move to buffering state
+	// else just stay in this state.
+	return BUFFERING;
+}
+
+int doBufferState(){
+	// while the received sequence number > expected number
+	// put the packet into the buffer
+	// set the highest variable to the received sequence number
+	// will tell you the largest thing in the buffer
+	// use that to know what to send an RR for after the buffer is flushed (what is next)
+	//  if th received packet sequence number == the expeced number move to the flushing state
+	return FLUSHING;
+}
+
+int doFlushingState(){
+	// write the expected and received packet to disc 
+	// increment the expected count 
+	// while the sequence number == the expected number 
+	// flush out the buffer
+	// if flushing ends and the buffer is not empty, return to Buffering State
+		// send an RR for the highest # packet before moving to next state
+		// send an SREJ for the expected. 
+		// flushing will stop when it encounters something that is not valid
+	// if flushing ends and the buffer is empty, then more to the in order state again (expected = highest)
+		// increment expected
+		// RR for the expected
+	return BUFFERING;
+	return FLUSHING;
+}
+
+
+TODO:
+need to change the done state to free the receiver buffer

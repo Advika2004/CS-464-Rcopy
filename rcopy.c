@@ -55,7 +55,7 @@ int main (int argc, char *argv[])
                 break;
             case GET_DATA:
                 printf("heyyyyy can get data now!!!");
-                state = doGetDataState();
+                state = doGetDataState(params);
                 break;
             case DONE:
                 printf("h");
@@ -271,11 +271,130 @@ int checkDestFile(RcopyParams params){
 	return 1;
 }
 
-int doGetDataState(){
-	//poll and wait on the ack packets from the server, here, then continue to sliding window.
-	printf("within the get data state\n");
-	return DONE;
+typedef enum {
+	IN_ORDER,
+	BUFFERING,
+	FLUSHING
+} ReceiveState;
+
+
+int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams params){
+
+	static ReceiveState subState = IN_ORDER;  //this is the starting state (we expect things to come in order)
+    int doneReceiving = 0;
+	int attempts = 0;
+
+	//open the destination file for writing bytes to it
+	//if the destination file can't be opened here then go to DONE
+    FILE *fp = fopen(params.dest_filename, "ab");
+    if (!fp) {
+        perror("Failed to open output file in GET_DATA");
+        return DONE; // or handle error
+    }
+
+	 // initialize the buffer and make sure it got initialized properly
+	 ReceiverBuffer* rbuf = initReceiverBuffer(params.buffer_size, params.window_size);
+	 if (!rbuf) {
+		 fprintf(stderr, "Error: could not allocate receiver buffer.\n");
+		 fclose(fp);
+		 return DONE;
+	 }
+
+	 // while I am still receiving packets 
+	 while (!doneReceiving) {
+        // keep checking for incoming data
+        int pollResult = pollCall(1000); // set a one second timeout 
+        if (pollResult > 0) {
+            Packet incomingPkt;
+            struct sockaddr_in6 fromAddr;
+            socklen_t fromLen = sizeof(fromAddr);
+
+            //receive the data
+            int bytes = recvfrom(socketNum, &incomingPkt, sizeof(incomingPkt), 0,
+                                 (struct sockaddr*)&fromAddr, &fromLen);
+
+            if (bytes <= 0) {
+                //!check if nothing was recieved, then move to DONE? 
+                return DONE;
+            }
+
+            //start up the second state machine
+            subState = handleDataPacket(rbuf, &incomingPkt, fp, subState, socketNum, server, params);
+
+            // Check for EOF
+            // extract the flag and make sure that its not 10
+            uint8_t flag = getPacketFlag(&incomingPkt);
+            if (flag == 10) {
+				// if it is EOF, then move to DONE state
+				//! write the EOF to the output file? 
+                //!Then send an EOF ACK if your protocol requires it
+                //!make and send an EOF ACK packet, not sure about this
+                doneReceiving = 1;
+				return DONE;
+            }
+        }
+        else {
+			// else if it times out, increment the attempts then check if it has been over 9 tries
+			// if it has then leave the program? 
+			attempts++;
+
+			if (attempts > 9){
+				//! must ask about this
+				return DONE;
+			}
+			//! this means nothing came and it timed out
+            fprintf(stderr, "Timeout occurred in GET_DATA; consider re-sending SREJ or abort.\n");
+     		doneReceiving = 1;
+        }
+    }
+
+	// at the end of the state, clean that shit up and close the end file
+	//! should I do this after the EOF is dealt with? what if that gets lost? 
+    freeReceiverBuffer(rbuf);
+    fclose(fp);
+    return DONE;
 }
+
+
+//should take in the incoming packet, the buffer struct, and destination file
+int doInOrderState(){
+	// set the expected counter at 0
+	// parse the received packet 
+	// check if the expected packet matches the sequence number of the received packet 
+	// call makeRRpacket
+	// send the RR packet for the packet just received 
+	// increment expected
+	// if the received sequence number > expected number, move to buffering state
+	// else just stay in this state.
+	return BUFFERING;
+}
+
+int doBufferState(){
+	// while the received sequence number > expected number
+	// put the packet into the buffer
+	// set the highest variable to the received sequence number
+	// will tell you the largest thing in the buffer
+	// use that to know what to send an RR for after the buffer is flushed (what is next)
+	//  if th received packet sequence number == the expeced number move to the flushing state
+	return FLUSHING;
+}
+
+int doFlushingState(){
+	// write the expected and received packet to disc 
+	// increment the expected count 
+	// while the sequence number == the expected number 
+	// flush out the buffer
+	// if flushing ends and the buffer is not empty, return to Buffering State
+		// send an RR for the highest # packet before moving to next state
+		// send an SREJ for the expected. 
+		// flushing will stop when it encounters something that is not valid
+	// if flushing ends and the buffer is empty, then more to the in order state again (expected = highest)
+		// increment expected
+		// RR for the expected
+	return BUFFERING;
+	return FLUSHING;
+}
+
 
 void doDoneState(int socketNum, FILE *destFile){
 	
@@ -482,4 +601,111 @@ int readFromStdin(char * buffer)
 	inputLen++;
 	
 	return inputLen;
+}
+
+// helper
+
+//will take the packet input and write just the data part to the output file 
+void writePayloadToFile(Packet *packet, FILE *file, RcopyParams params)
+{
+	// if the packet is NULL or the file is not open or something then return
+    if (!packet || !file) {
+		return;
+	}
+	//how much data there will be is specified in the command line arguments as buffer_size 
+    int payloadSize = params.buffer_size;
+    if (payloadSize <= 0) {
+        // No payload or invalid size
+        return;
+    }
+
+    // Write from data[7..end]
+    fwrite(packet->data + HEADER_SIZE, 1, payloadSize, file);
+}
+
+// gets just the flag out so I can check what the flag is 
+uint8_t getPacketFlag(Packet *packet)
+{
+    if (!packet) {
+		return 0;
+	} 
+    // The flag is at data[6]
+    return packet->data[6];
+}
+
+// gets the sequence number out
+uint32_t getPacketSequence(Packet *packet)
+{
+    if (!packet) {
+		return 0;
+	}
+    uint32_t netSeq;
+    memcpy(&netSeq, packet->data, 4);
+    // Convert from network to host byte order
+	uint32_t host_sequence_number = ntohl(netSeq);
+	return host_sequence_number;
+}
+
+
+uint8_t* makeRRPacketBeforeChecksum(uint32_t localSeq, uint32_t rrSequence)
+{
+    static uint8_t buffer[CONTROL_BUFF_SIZE];
+
+    // 1) Convert localSeq to network order, copy into first 4 bytes
+    uint32_t netLocalSeq = htonl(localSeq);
+    memcpy(buffer, &netLocalSeq, 4);
+
+    // 2) Zero out the checksum (2 bytes)
+    uint16_t zeroCsum = 0;
+    memcpy(buffer + 4, &zeroCsum, 2);
+
+    // 3) Set flag = 5 for RR
+    uint8_t flag = 5;
+    memcpy(buffer + 6, &flag, 1);
+
+    // 4) The sequence we are acknowledging (rrSequence) in network order
+    uint32_t netRR = htonl(rrSequence);
+    memcpy(buffer + 7, &netRR, 4);
+
+    return buffer;
+}
+
+uint8_t* makeSREJPacketBeforeChecksum(uint32_t localSeq, uint32_t missingPacket)
+{
+    static uint8_t buffer[CONTROL_BUFF_SIZE];
+
+    // 1) Convert localSeq to network order, copy into first 4 bytes
+    uint32_t netLocalSeq = htonl(localSeq);
+    memcpy(buffer, &netLocalSeq, 4);
+
+    // 2) Zero out the checksum (2 bytes)
+    uint16_t zeroCsum = 0;
+    memcpy(buffer + 4, &zeroCsum, 2);
+
+    // 3) Set flag = 5 for SREJ
+    uint8_t flag = 6;
+    memcpy(buffer + 6, &flag, 1);
+
+    // 4) The sequence we are acknowledging (rrSequence) in network order
+    uint32_t netMissing= htonl(missingPacket);
+    memcpy(buffer + 7, &netMissing, 4);
+
+    return buffer;
+}
+
+uint16_t calculateRR_SREJPacketChecksum(uint8_t *buffer)
+{
+    uint16_t static temp_buff[CONTROL_BUFF_SIZE + 1];
+	memcpy(temp_buff, buffer, 11);
+	uint8_t even_length = 0;
+	memcpy(temp_buff + 11, &even_length, 1);
+	uint16_t calculatedChecksum = in_cksum(temp_buff, sizeof(temp_buff));
+	return calculatedChecksum;
+}
+
+uint8_t* makeRR_SREJPacketAfterChecksum(uint8_t *buffer, uint16_t calculated_sum)
+{
+    memcpy(buffer + 4, &calculated_sum, 2);
+
+    return buffer;
 }

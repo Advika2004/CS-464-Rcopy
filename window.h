@@ -9,6 +9,7 @@
 typedef struct {
     int sequence_number;
     int data_size;
+    int valid; 
     int ACK;
     uint8_t data[MAX_PACKET_SIZE];
 } Packet;

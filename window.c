@@ -32,6 +32,13 @@ ReceiverBuffer* initReceiverBuffer(int buffer_size, int window_size) {
             free(buffer);
             return NULL;
         }
+
+        // Initialize packet fields
+        buffer->buffer[i]->sequence_number = -1;
+        buffer->buffer[i]->data_size       = 0;
+        buffer->buffer[i]->ACK            = 0;
+        buffer->buffer[i]->valid          = 0; // Mark invalid initially
+        memset(buffer->buffer[i]->data, 0, MAX_PACKET_SIZE);
     }
 
     buffer->buffer_size = buffer_size;
@@ -43,30 +50,31 @@ ReceiverBuffer* initReceiverBuffer(int buffer_size, int window_size) {
 
 //takes in a packet and puts it in the buffer
 void insertReceiverPacket(ReceiverBuffer *buffer, Packet *packet) {
-    // calculates what index to put it at
-    int index = packet->sequence_number % buffer->window_size;
-    printf("sequence number: %d\n", packet->sequence_number);
-    printf("index expected: %d\n", index);
-    printf("buffer window size: %d\n", buffer->window_size);
+    if (!buffer || !packet) return;
 
-    //check if the packet is past the window size
-    if (packet->sequence_number > buffer->expected + buffer->window_size) {
-        printf("Packet %d is beyond window range (expected: %d, window: %d). Discarding.\n",
-               packet->sequence_number, buffer->expected, buffer->window_size);
-        return;  // dont want to store that
+    int seq = packet->sequence_number;
+    // If packet is *way* beyond the current expected+window, discard
+    if (seq > buffer->expected + buffer->window_size) {
+        printf("Packet %d beyond receiver window (expected up to %d). Discarding.\n",
+               seq, buffer->expected + buffer->window_size);
+        return;
     }
 
-    // Copy the new packet into the preallocated buffer slot
-    memcpy(buffer->buffer[index], packet, sizeof(Packet));
+    int index = seq % buffer->window_size;
 
+    // Fill the packet slot carefully; don't just blindly memcpy if you want to preserve your own fields
+    buffer->buffer[index]->sequence_number = packet->sequence_number;
+    buffer->buffer[index]->data_size       = packet->data_size;
+    buffer->buffer[index]->ACK            = packet->ACK;
+    buffer->buffer[index]->valid          = 1;  // Mark this slot as valid
+    memcpy(buffer->buffer[index]->data, packet->data, packet->data_size);
 
-    // if the sequence number is higher than the past one, update it
-    if (packet->sequence_number > buffer->highest) {
-        buffer->highest = packet->sequence_number;
+    // Update highest if needed
+    if (seq > buffer->highest) {
+        buffer->highest = seq;
     }
-
-    printReceiverBuffer(buffer);
 }
+
 
 //gets the next packet and writes it to the file 
 // makes sure that when things get written to the file they are written in order
@@ -90,7 +98,7 @@ int flushBuffer(ReceiverBuffer *buffer, FILE *outputFile, int data_size) {
         found_packet = 0;
         
         // Check if this slot has the expected packet
-        if (buffer->buffer[index] && buffer->buffer[index]->sequence_number == buffer->expected) {
+        if (buffer->buffer[index] && buffer->buffer[index]->sequence_number == buffer->expected && buffer->buffer[index]->valid == 1) {
             found_packet = 1;
             
             // Write the packet data to file (skipping the 7-byte header)
@@ -101,6 +109,8 @@ int flushBuffer(ReceiverBuffer *buffer, FILE *outputFile, int data_size) {
             // Clear the packet data
             memset(buffer->buffer[index]->data, 0, MAX_PACKET_SIZE);
             buffer->buffer[index]->sequence_number = -1; // Mark as empty
+            // mark as invalid after flushing 
+            buffer->buffer[index]->valid = 0;
             buffer->buffer[index]->data_size = 0;
             
             // Move to the next packet
@@ -251,18 +261,28 @@ void destroySenderWindow(SenderWindow *window) {
 
 
 void printReceiverBuffer(ReceiverBuffer *buffer) {
+    if (!buffer) {
+        printf("Receiver buffer is NULL.\n");
+        return;
+    }
+
     printf("\n--- Receiver Buffer State ---\n");
+    printf("Expected: %d, Highest: %d\n", buffer->expected, buffer->highest);
     int i;
+
     for (i = 0; i < buffer->window_size; i++) {
-        if (buffer->buffer[i] && buffer->buffer[i]->ACK) {
-            printf("Slot %d -> Seq: %d | Size: %d | ACK: %d\n",
-                   i, buffer->buffer[i]->sequence_number, buffer->buffer[i]->data_size, buffer->buffer[i]->ACK);
+        Packet *pkt = buffer->buffer[i];
+
+        if (pkt && pkt->valid) {
+            printf("Slot %d -> Seq: %d | Size: %d | Valid: %d\n",
+                   i, pkt->sequence_number, pkt->data_size, pkt->valid);
         } else {
             printf("Slot %d -> EMPTY\n", i);
         }
     }
     printf("----------------------------\n\n");
 }
+
 
 void printSenderBuffer(SenderWindow *window) {
     printf("\n--- Sender Window State ---\n");
