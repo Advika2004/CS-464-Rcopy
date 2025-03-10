@@ -38,7 +38,7 @@ int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, 
 int doDoneState();
 int doWaitOnAckState();
 int doWaitOnEOFAckState();
-uint32_t getPacketSequence(Packet *packet);
+uint32_t getSequenceFromBuffer(uint8_t *buffer);
 void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6 * client, socklen_t clientAddrLen, int main_server_socket, ServerParams serverParam);
 uint8_t* makeTalkHereNowBeforeChecksum();
 uint8_t* makeVALIDFilenameACKBeforeChecksum();

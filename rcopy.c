@@ -58,7 +58,7 @@ int main (int argc, char *argv[])
             case GET_DATA:
 			printf("Socket number in the Get Data state: %d\n", socketNum);
                 printf("heyyyyy can get data now!!!");
-                state = doGetDataState(params);
+                state = doGetDataState(socketNum, &server, params);
 				printf("Socket number in the Get Data state after func: %d\n", socketNum);
                 break;
             case DONE:
@@ -280,7 +280,7 @@ int checkDestFile(RcopyParams params){
 
 int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams params){
 
-	printf("\n[CLIENT] Listening on socket: %d for data packets...\n", ntohl(socketNum));
+	printf("\n[CLIENT] Listening on socket start: %d for data packets...\n", socketNum);
 
 	static ReceiveState subState = IN_ORDER;  //this is the starting state (we expect things to come in order)
     int doneReceiving = 0;
@@ -307,15 +307,26 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
         // keep checking for incoming data
         int pollResult = pollCall(1000); // set a one second timeout 
         if (pollResult > 0) {
-            Packet incomingPkt;
+            RPacket incomingPkt;
             struct sockaddr_in6 fromAddr;
             socklen_t fromLen = sizeof(fromAddr);
 
 			printf("[DEBUG] Poll detected activity. Attempting to receive a packet...\n");
 
+			uint8_t *receivedBuffer = (uint8_t *)malloc(MAX_HEADER_LEN + params.buffer_size);
+			if (!receivedBuffer) {
+    			perror("Failed to allocate memory for received buffer");
+    			exit(EXIT_FAILURE);
+			}
+
             //receive the data
-            int bytes = recvfrom(socketNum, &incomingPkt, sizeof(incomingPkt), 0,
+            int bytes = recvfrom(socketNum, receivedBuffer, sizeof(incomingPkt), 0,
                                  (struct sockaddr*)&fromAddr, &fromLen);
+			
+			//! instead just copy over the buffer's sequence number checksum and flag to the incoming packet struct 
+			//! put the sequence number in host order 
+			//! dont need to worry about the data. 
+			//memcpy(&incomingPkt, receivedBuffer, bytes);
 
 			if (bytes < 0) {
 				perror("[ERROR] recvfrom failed");
@@ -328,11 +339,22 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
 			printf("[DEBUG] Received packet: %d bytes\n", bytes);
 
             //start up the second state machine
-            subState = handleDataPacket(rbuf, &incomingPkt, fp, subState, socketNum, server, params);
+
+			printf("reaching until here\n");
+            subState = handleDataPacket(rbuf, fp, subState, socketNum, server, params, receivedBuffer);
 
             // Check for EOF
             // extract the flag and make sure that its not 10
-            uint8_t flag = getPacketFlag(&incomingPkt);
+
+			// Extract sequence number and flag
+            uint32_t seq;
+            uint8_t flag;
+            memcpy(&seq, receivedBuffer, 4);
+            memcpy(&flag, receivedBuffer + 6, 1);
+			seq = ntohl(seq);
+
+			printf("[DEBUG] Received Packet Info - SeqNo: %u | Flag: %u\n", seq, flag);
+        
             if (flag == 10) {
 				printf("[DEBUG] EOF Packet received! Sending EOF ACK.\n");
 				// if it is EOF, then move to DONE state
@@ -340,8 +362,10 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
                 //!Then send an EOF ACK if your protocol requires it
                 //!make and send an EOF ACK packet, not sure about this
                 doneReceiving = 1;
+				free(receivedBuffer);
 				return DONE;
             }
+			free(receivedBuffer);
         }
         else {
 			// else if it times out, increment the attempts then check if it has been over 9 tries
@@ -356,6 +380,7 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
 				return DONE;
 			}
 			//! this means nothing came and it timed out
+			printf("\n[CLIENT] Listening on socket end: %d for data packets...\n", socketNum);
             fprintf(stderr, "Timeout occurred in GET_DATA; consider re-sending SREJ or abort.\n");
      		doneReceiving = 1;
         }
@@ -370,10 +395,29 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
 }
 
 
-ReceiveState handleDataPacket(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, ReceiveState currentState, int socketNum, struct sockaddr_in6 *server,
-	RcopyParams params)
+ReceiveState handleDataPacket(ReceiverBuffer *rbuf, FILE *fp, ReceiveState currentState, int socketNum, struct sockaddr_in6 *server,
+	RcopyParams params, uint8_t* buffer)
 {
-	uint32_t seqIncoming = getPacketSequence(incomingPkt);
+
+	printf("handling data function\n");
+
+	// Check if buffer is NULL
+    if (!buffer) {
+        printf("[ERROR] Buffer is NULL in handleDataPacket()\n");
+        return DONE;
+    }
+
+    // Check if rbuf is NULL
+    if (!rbuf) {
+        printf("[ERROR] Receiver Buffer (rbuf) is NULL in handleDataPacket()\n");
+        return DONE;
+    }
+
+	uint32_t seqIncoming;
+    memcpy(&seqIncoming, buffer, 4);
+    seqIncoming = ntohl(seqIncoming);
+
+	printf("DEBUG: Incoming Sequence Number before FSM: %d\n", seqIncoming);
 
 	// --- Step 1: Check if seqIncoming < expected (old packet) ---
 	if (seqIncoming < rbuf->expected) {
@@ -386,10 +430,13 @@ ReceiveState handleDataPacket(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *f
 	// --- Step 2: If seqIncoming >= expected, proceed with normal sub-state logic ---
 	switch (currentState) {
 		case IN_ORDER:
-			return doInOrderState(rbuf, incomingPkt, fp, socketNum, server, params);
+			printf("Reaching In Order State\n");
+			return doInOrderState(rbuf, fp, socketNum, server, params, buffer);
 		case BUFFERING:
-			return doBufferState(rbuf, incomingPkt, fp, socketNum, server, params);
+		printf("Reaching Buffer State\n");
+			return doBufferState(rbuf, fp, socketNum, server, params, buffer);
   		case FLUSHING:
+		printf("Reaching Flushing State\n");
 			return doFlushingState(rbuf, fp, socketNum, server, params);
 	}
 	return currentState;
@@ -406,16 +453,19 @@ ReceiveState handleDataPacket(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *f
 	// increment expected
 	// if the received sequence number > expected number, move to buffering state
 	// else just stay in this state.
-	ReceiveState doInOrderState(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params)
+	ReceiveState doInOrderState(ReceiverBuffer *rbuf, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params, uint8_t* buffer)
 {
 	//the next expected
-	uint32_t seqExpected = rbuf->expected;
+	//uint32_t seqExpected = rbuf->expected;
 	//actual seq of the incoming packet
-	uint32_t seqIncoming = getPacketSequence(incomingPkt);
+	uint32_t seqExpected = rbuf->expected;
+    uint32_t seqIncoming;
+    memcpy(&seqIncoming, buffer, 4);
+    seqIncoming = ntohl(seqIncoming);
 
 	if (seqIncoming == seqExpected) {
 		// if its what we want write data directly to output file
-		writePayloadToFile(incomingPkt, fp, params);
+		writePayloadToFile(buffer, fp, params);
 
 		//increment the expected
 		rbuf->expected++;
@@ -445,12 +495,16 @@ ReceiveState handleDataPacket(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *f
 			// Poll for incoming packets before retrying
             int pollResult = pollCall(1000);  // Wait for 1 second
             if (pollResult == socketNum) {
+				uint8_t responseBuffer[MAX_HEADER_LEN + params.buffer_size];
                 // Received something, check if it's the next expected packet
-                Packet responsePkt;
-                int received_bytes = recvfrom(socketNum, &responsePkt, sizeof(responsePkt), 0, NULL, NULL);
+                int received_bytes = recvfrom(socketNum, responseBuffer, sizeof(responseBuffer), 0, NULL, NULL);
                 if (received_bytes > 0) {
-                    uint32_t receivedSeq = getPacketSequence(&responsePkt);
-                    uint8_t receivedFlag = getPacketFlag(&responsePkt);
+                    uint32_t receivedSeq;
+                    memcpy(&receivedSeq, responseBuffer, 4);
+                    receivedSeq = ntohl(receivedSeq);
+
+                    uint8_t receivedFlag;
+                    memcpy(&receivedFlag, responseBuffer + 6, 1);
 
                     if (receivedSeq == rbuf->expected && receivedFlag == 16) { // 16 = DATA_PACKET_FLAG
                         // We got the next expected packet → Stay in IN_ORDER
@@ -499,14 +553,19 @@ void resendLastControl(ReceiverBuffer *rbuf, int socketNum, struct sockaddr_in6 
 	// use that to know what to send an RR for after the buffer is flushed (what is next)
 	//  if th received packet sequence number == the expeced number move to the flushing state
 
-ReceiveState doBufferState(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params)
+
+ReceiveState doBufferState(ReceiverBuffer *rbuf, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params, uint8_t* receivedBuffer)
 {
-	// which is the next expected
-    uint32_t seqExpected = rbuf->expected;
-    uint32_t seqIncoming = getPacketSequence(incomingPkt);
+	uint32_t seqExpected = rbuf->expected;
+    uint32_t seqIncoming;
+
+    // Extract sequence number from buffer
+	memcpy(&seqIncoming, receivedBuffer, 4);
+    seqIncoming = ntohl(seqIncoming);
 
     // Store the out-of-order packet in the buffer
-    insertReceiverPacket(rbuf, incomingPkt);
+	//! change this to have the right arguments and pass in the incoming buffer as the byte buffer. 
+    insertReceiverPacket(rbuf,receivedBuffer,sizeof(receivedBuffer));
     
     // Update highest received packet
     if (seqIncoming > rbuf->highest) {
@@ -534,11 +593,15 @@ ReceiveState doBufferState(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, 
         int pollResult = pollCall(1000);  // 1-second timeout
         if (pollResult == socketNum) {
             // Received something, check if it's the missing packet
-            Packet responsePkt;
-            int received_bytes = recvfrom(socketNum, &responsePkt, sizeof(responsePkt), 0, NULL, NULL);
+            uint8_t responseBuffer[MAX_HEADER_LEN + params.buffer_size];
+            int received_bytes = recvfrom(socketNum, responseBuffer, sizeof(responseBuffer), 0, NULL, NULL);
             if (received_bytes > 0) {
-                uint32_t receivedSeq = getPacketSequence(&responsePkt);
-                uint8_t receivedFlag = getPacketFlag(&responsePkt);
+                uint32_t receivedSeq;
+                memcpy(&receivedSeq, responseBuffer, 4);
+                receivedSeq = ntohl(receivedSeq);
+
+                uint8_t receivedFlag;
+                memcpy(&receivedFlag, responseBuffer + 6, 1);
 
                 if (receivedSeq == seqExpected && receivedFlag == 16) { // 16 = DATA_PACKET_FLAG
                     // The missing packet has arrived → Move to FLUSHING
@@ -805,45 +868,21 @@ int readFromStdin(char * buffer)
 // helper
 
 //will take the packet input and write just the data part to the output file 
-void writePayloadToFile(Packet *packet, FILE *file, RcopyParams params)
+void writePayloadToFile(uint8_t* buffer, FILE *file, RcopyParams params)
 {
-	// if the packet is NULL or the file is not open or something then return
-    if (!packet || !file) {
-		return;
-	}
-	//how much data there will be is specified in the command line arguments as buffer_size 
-    int payloadSize = params.buffer_size;
-    if (payloadSize <= 0) {
-        // No payload or invalid size
+	if (!buffer || !file) {
         return;
     }
 
-    // Write from data[7..end]
-    fwrite(packet->data + HEADER_SIZE, 1, payloadSize, file);
+    int payloadSize = params.buffer_size;
+    if (payloadSize <= 0) {
+        return;
+    }
+
+    // Write from `buffer + HEADER_SIZE` to skip headers
+    fwrite(buffer + HEADER_SIZE, 1, payloadSize, file);
 }
 
-// gets just the flag out so I can check what the flag is 
-uint8_t getPacketFlag(Packet *packet)
-{
-    if (!packet) {
-		return 0;
-	} 
-    // The flag is at data[6]
-    return packet->data[6];
-}
-
-// gets the sequence number out
-uint32_t getPacketSequence(Packet *packet)
-{
-    if (!packet) {
-		return 0;
-	}
-    uint32_t netSeq;
-    memcpy(&netSeq, packet->data, 4);
-    // Convert from network to host byte order
-	uint32_t host_sequence_number = ntohl(netSeq);
-	return host_sequence_number;
-}
 
 
 uint8_t* makeRRPacketBeforeChecksum(uint32_t localSeq, uint32_t rrSequence)
@@ -908,3 +947,59 @@ uint8_t* makeRR_SREJPacketAfterChecksum(uint8_t *buffer, uint16_t calculated_sum
 
     return buffer;
 }
+
+void printPacketInfo(RPacket *pkt) {
+    if (!pkt) {
+        printf("[DEBUG] Packet is NULL\n");
+        return;
+    }
+
+    printf("[DEBUG] Packet Info - SeqNo: %u | Flag: %u | Checksum: 0x%X\n",
+           ntohl(pkt->sequence_number), pkt->flag, ntohs(pkt->checksum));
+}
+
+
+
+// // gets just the flag out so I can check what the flag is 
+// uint8_t getFlagFromBuffer(uint8_t *buffer)
+// {
+//     if (!buffer) {
+//         return 0;
+//     }
+//     return buffer[6];  // Read the flag from byte 7 
+// }
+
+// // gets the sequence number out
+// // Extracts the sequence number from the first 4 bytes of a uint8_t buffer
+// uint32_t getSequenceFromBuffer(uint8_t *buffer)
+// {
+//     if (!buffer) {
+//         return 0;
+//     }
+//     uint32_t netSeq;
+//     memcpy(&netSeq, buffer, 4);
+//     return ntohl(netSeq);  // Convert from network byte order to host byte order
+// }
+
+// // gets just the flag out so I can check what the flag is 
+// uint8_t getPacketFlag(RPacket *packet)
+// {
+//     if (!packet) {
+// 		return 0;
+// 	} 
+//     // The flag is at data[6]
+//     return packet->data[6];
+// }
+
+// // gets the sequence number out
+// uint32_t getPacketSequence(RPacket *packet)
+// {
+//     if (!packet) {
+// 		return 0;
+// 	}
+//     uint32_t netSeq;
+//     memcpy(&netSeq, packet->data, 4);
+//     // Convert from network to host byte order
+// 	uint32_t host_sequence_number = ntohl(netSeq);
+// 	return host_sequence_number;
+// }

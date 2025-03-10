@@ -446,6 +446,7 @@ TODO:
 - check if I used the packet structure properly in Rcopy
 - i dont think I made a instance of it when putting it in the buffer
 - reset the sequence number global when creating the sliding window 
+- make sure to test larger file size where window is small and needs to be cycled through
 - finish the following functions properly: 
 
 // need to make this to resend the packet 

@@ -36,12 +36,14 @@
 #define MAX_REMOTE_MACHINE 256 
 
 //Struct for the packet
-// typedef struct Packet{
-//     uint32_t sequence_number; 
-//     uint16_t checksum;
-//     uint8_t flag;
-//     uint8_t data[1400]; 
-// } Packet;
+#pragma pack(push, 1)
+typedef struct RPacket {
+    uint32_t sequence_number;
+    uint16_t checksum;
+    uint8_t flag;
+    uint8_t data[1400];
+} RPacket;
+#pragma pack(pop)
 
 //struct to store input
 typedef struct RcopyParams {
@@ -77,15 +79,19 @@ void doDoneState(int socketNum, FILE *destFile);
 uint8_t* makeFilenameACKBeforeChecksum(uint8_t flag);
 uint16_t calculateFilenameChecksumACK(uint8_t* buffer);
 uint8_t* makeFilenameACKAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);
-void writePayloadToFile(Packet *packet, FILE *file, RcopyParams params);
-uint8_t getPacketFlag(Packet *packet);
-uint32_t getPacketSequence(Packet *packet);
-void writePayloadToFile(Packet *packet, FILE *file, RcopyParams params);
-ReceiveState handleDataPacket(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, ReceiveState currentState, int socketNum, struct sockaddr_in6 *server,
-	RcopyParams params);
-ReceiveState doInOrderState(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params);
+//void writePayloadToFile(RPacket *packet, FILE *file, RcopyParams params);
+uint8_t getFlagFromBuffer(uint8_t *buffer);
+uint8_t getPacketFlag(RPacket *packet);
+uint32_t getPacketSequence(RPacket *packet);
+uint32_t getSequenceFromBuffer(uint8_t *buffer);
+void printPacketInfo(RPacket *pkt);
+
+void writePayloadToFile(uint8_t* buffer, FILE *file, RcopyParams params);
+ReceiveState handleDataPacket(ReceiverBuffer *rbuf, FILE *fp, ReceiveState currentState, int socketNum, struct sockaddr_in6 *server,
+	RcopyParams params, uint8_t* buffer);
+ReceiveState doInOrderState(ReceiverBuffer *rbuf, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params, uint8_t* buffer);
 void resendLastControl(ReceiverBuffer *rbuf, int socketNum, struct sockaddr_in6 *server);
-ReceiveState doBufferState(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params);
+ReceiveState doBufferState(ReceiverBuffer *rbuf, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params, uint8_t* buffer);
 ReceiveState doFlushingState(ReceiverBuffer *rbuf, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params);
 uint8_t* makeRRPacketBeforeChecksum(uint32_t localSeq, uint32_t rrSequence);
 uint8_t* makeRR_SREJPacketAfterChecksum(uint8_t *buffer, uint16_t calculated_sum);

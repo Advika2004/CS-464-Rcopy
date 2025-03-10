@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <arpa/inet.h>
 
 #define MAX_PACKET_SIZE 1407  // As per spec
 
@@ -36,7 +37,8 @@ typedef struct {
 
 // Receiver functions
 ReceiverBuffer* initReceiverBuffer(int buffer_size, int window_size);
-void insertReceiverPacket(ReceiverBuffer *buffer, Packet *packet);
+//void insertReceiverPacket(ReceiverBuffer *buffer, Packet *packet);
+void insertReceiverPacket(ReceiverBuffer *buffer, uint8_t *recvBuffer, int receivedBytes);
 int flushBuffer(ReceiverBuffer *buffer, FILE *outputFile, int buffer_size);
 void freeReceiverBuffer(ReceiverBuffer *buffer);
 

@@ -390,12 +390,18 @@ int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, 
             // Insert into the sender window
             insertPacketIntoWindow(window, data_sequence_number, finalPDU, bytesRead + 7);
 			printf("[DEBUG] Inserted packet #%d into sender window.\n", data_sequence_number);
-            printSenderBuffer(window);
+        
 
             // Send the packet to the receiver
             int index = data_sequence_number % window->window_size;
             int bytes_sent = sendtoErr(child_server_socket, window->buffer[index]->data,
                                        bytesRead + 7, 0, (struct sockaddr*) client, clientAddrLen);
+			
+			//current becomes what is being sent 
+			window->current = data_sequence_number;
+
+			//window after sending each packet
+			printSenderBuffer(window);
 
             printf("Sent packet #%d, Bytes: %d\n", data_sequence_number, bytes_sent);
 
@@ -418,7 +424,7 @@ int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, 
 
             if (received > 0) {
                 uint8_t response_flag = recv_buffer[6];  // Extract flag
-                uint32_t receivedSeq = getPacketSequence((Packet*) recv_buffer);
+                uint32_t receivedSeq = getSequenceFromBuffer(recv_buffer);
 
                 if (response_flag == 5) {  // RR Received
                     printf("Received RR for %d\n", receivedSeq);
@@ -450,7 +456,7 @@ int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, 
 
                 if (received > 0) {
                     uint8_t response_flag = recv_buffer[6];
-                    uint32_t receivedSeq = getPacketSequence((Packet*) recv_buffer);
+                    uint32_t receivedSeq = getSequenceFromBuffer(recv_buffer);
 
                     if (response_flag == 5) {  // RR
                         printf("Received RR for %d\n", receivedSeq);
@@ -760,14 +766,13 @@ void handleZombies(int sig) {
 }
 
 // gets the sequence number out
-uint32_t getPacketSequence(Packet *packet)
+// Extracts the sequence number from the first 4 bytes of a uint8_t buffer
+uint32_t getSequenceFromBuffer(uint8_t *buffer)
 {
-    if (!packet) {
-		return 0;
-	}
+    if (!buffer) {
+        return 0;
+    }
     uint32_t netSeq;
-    memcpy(&netSeq, packet->data, 4);
-    // Convert from network to host byte order
-	uint32_t host_sequence_number = ntohl(netSeq);
-	return host_sequence_number;
+    memcpy(&netSeq, buffer, 4);
+    return ntohl(netSeq);  // Convert from network byte order to host byte order
 }

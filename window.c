@@ -49,10 +49,14 @@ ReceiverBuffer* initReceiverBuffer(int buffer_size, int window_size) {
 }
 
 //takes in a packet and puts it in the buffer
-void insertReceiverPacket(ReceiverBuffer *buffer, Packet *packet) {
-    if (!buffer || !packet) return;
+void insertReceiverPacket(ReceiverBuffer *buffer, uint8_t *recvBuffer, int receivedBytes) {
+    if (!buffer || !recvBuffer || receivedBytes <= 0) return;
 
-    int seq = packet->sequence_number;
+    uint32_t seq;
+    memcpy(&seq, recvBuffer, sizeof(uint32_t));
+    seq = ntohl(seq);
+
+
     // If packet is *way* beyond the current expected+window, discard
     if (seq > buffer->expected + buffer->window_size) {
         printf("Packet %d beyond receiver window (expected up to %d). Discarding.\n",
@@ -63,11 +67,14 @@ void insertReceiverPacket(ReceiverBuffer *buffer, Packet *packet) {
     int index = seq % buffer->window_size;
 
     // Fill the packet slot carefully; don't just blindly memcpy if you want to preserve your own fields
-    buffer->buffer[index]->sequence_number = packet->sequence_number;
-    buffer->buffer[index]->data_size       = packet->data_size;
-    buffer->buffer[index]->ACK            = packet->ACK;
+    buffer->buffer[index]->sequence_number = seq;
+    // the data size would be how many total bytes came in - 7 for the header
+    buffer->buffer[index]->data_size       = receivedBytes - 7;
+    // starts off not ACK
+    buffer->buffer[index]->ACK            = 0;
     buffer->buffer[index]->valid          = 1;  // Mark this slot as valid
-    memcpy(buffer->buffer[index]->data, packet->data, packet->data_size);
+    // Store the entire received buffer in the data field of Packet
+    memcpy(buffer->buffer[index]->data, recvBuffer, receivedBytes);
 
     // Update highest if needed
     if (seq > buffer->highest) {
