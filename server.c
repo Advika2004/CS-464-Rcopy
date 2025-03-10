@@ -185,7 +185,7 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
                 break;
             case SEND_DATA:
                 printf("send data\n");
-                state = doSendDataState();
+                state = doSendDataState(filename, buffer_size, window_size, child_server_socket, client, clientAddrLen);
                 break;
             case WAIT_ON_ACK:
                 printf("waiting on ack\n");
@@ -364,12 +364,12 @@ int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, 
             // **Handle EOF case**
             if (bytesRead == 0) {
                 printf("Reached EOF, sending EOF packet.\n");
-                sendEOFpacket(child_server_socket, client, clientAddrLen); // Call the EOF sending function
+                //! write this !!!! sendEOFpacket(child_server_socket, client, clientAddrLen); // Call the EOF sending function
                 return WAIT_ON_EOF_ACK;  // Move to EOF state immediately
             }
 
             // Create the Data PDU
-            uint8_t *dataPDU = makeDataPacketBeforeChecksum(data_chunk);
+            uint8_t *dataPDU = makeDataPacketBeforeChecksum(data_chunk, buffer_size);
             uint16_t checksum = calculateDataPacketChecksum(dataPDU, bytesRead);
             uint8_t *finalPDU = makeDataPacketAfterChecksum(dataPDU, checksum);
 
@@ -492,8 +492,8 @@ int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, 
 
 
 // will take in the chunk of data read out from the file and make the PDU
-uint8_t* makeDataPacketBeforeChecksum(uint8_t* data_chunk){
-	uint8_t static buffer[MAX_HEADER_LEN + buffer_size];
+uint8_t* makeDataPacketBeforeChecksum(uint8_t* data_chunk, uint8_t buffer_size){
+	uint8_t *buffer[MAX_HEADER_LEN + buffer_size];
 
 	//chose 1 for the sequence number for acks as well
     uint32_t sequence_num = ntohl(data_sequence_number);
@@ -508,9 +508,9 @@ uint8_t* makeDataPacketBeforeChecksum(uint8_t* data_chunk){
     memcpy(buffer + 6, &flag, 1);
 
 	//put the data in there
-	memcpy(buffer + 7, data_chunk, sizeof(data_chunk));
+	memcpy(buffer + 7, data_chunk, buffer_size);
 
-    return buffer;
+    return *buffer;
 }
 
 uint8_t* makeDataPacketAfterChecksum(uint8_t *buffer, uint16_t calculated_checksum){
@@ -520,24 +520,24 @@ uint8_t* makeDataPacketAfterChecksum(uint8_t *buffer, uint16_t calculated_checks
 }
 
 uint16_t calculateDataPacketChecksum(uint8_t *buffer, int buffer_size){
-	int length_of_buffer = buffer_size + 7;
-	if (lenght_of_buffer % 2 == 0){
+	uint8_t length_of_buffer = buffer_size + 7;
+	if (length_of_buffer % 2 == 0){
 		// it is already even 
-		uint16_t static temp_buff[buffer_size + 7];
+		uint16_t temp_buff[buffer_size + 7];
 		// copy in the header
 		memcpy(temp_buff, buffer, 7);
 		// copy in the data (buffer size number of bytes after the header)
-		memcpy(temp_buff + 7, buffer, buffer_size)
+		memcpy(temp_buff + 7, buffer, buffer_size);
 		uint16_t calculatedChecksum = in_cksum(temp_buff, sizeof(temp_buff));
 		return calculatedChecksum;
 	}
 	// it is odd, add 1 more byte
-	uint16_t static temp_buff[buffer_size + 7 + 1];
+	uint16_t temp_buff[buffer_size + 7 + 1];
 	//goal is to make the static buffer the next closest even number of bytes based on the buffer size + 7
 	// copy in the header
 	memcpy(temp_buff, buffer, 7);
 	// copy in the data (buffer size number of bytes after the header)
-	memcpy(temp_buff + 7, buffer, buffer_size)
+	memcpy(temp_buff + 7, buffer, buffer_size);
 	uint8_t even_length = 0;
 	memcpy(temp_buff + 7, &even_length, 1);
 	uint16_t calculatedChecksum = in_cksum(temp_buff, sizeof(temp_buff));
@@ -730,4 +730,17 @@ void printPDU(uint8_t *buffer) {
 void handleZombies(int sig) {
     int stat = 0;
     while (waitpid(-1, &stat, WNOHANG) > 0) {} // Non-blocking cleanup of all finished child processes
+}
+
+// gets the sequence number out
+uint32_t getPacketSequence(Packet *packet)
+{
+    if (!packet) {
+		return 0;
+	}
+    uint32_t netSeq;
+    memcpy(&netSeq, packet->data, 4);
+    // Convert from network to host byte order
+	uint32_t host_sequence_number = ntohl(netSeq);
+	return host_sequence_number;
 }

@@ -22,7 +22,6 @@
 #include "pollLib.h"
 #include "window.h"
 
-
 #define MAXBUF 80
 #define HEADER_SIZE 7  // 4 bytes seq#, 2 bytes checksum, 1 byte flag
 #define MAX_FILENAME_LEN 100
@@ -37,12 +36,12 @@
 #define MAX_REMOTE_MACHINE 256 
 
 //Struct for the packet
-typedef struct Packet{
-    uint32_t sequence_number; 
-    uint16_t checksum;
-    uint8_t flag;
-    uint8_t data[1400]; 
-} __attribute__((packed));
+// typedef struct Packet{
+//     uint32_t sequence_number; 
+//     uint16_t checksum;
+//     uint8_t flag;
+//     uint8_t data[1400]; 
+// } Packet;
 
 //struct to store input
 typedef struct RcopyParams {

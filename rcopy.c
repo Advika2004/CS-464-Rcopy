@@ -88,7 +88,7 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
     	for (i = 0; i < 114; i++) {
         	printf("%02X ", buffer[i]);
     	}
-    	printf("\n");
+    	printf("hfgh\n");
 		int bytes_sent = sendtoErr(socketNum, buffer, 114, 0, (struct sockaddr *) server, serverAddrLen);
 		if (bytes_sent < 0){
 			perror("sendtoErr failed\n");
@@ -347,6 +347,7 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
     freeReceiverBuffer(rbuf);
     fclose(fp);
     return DONE;
+}
 
 
 ReceiveState handleDataPacket(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, ReceiveState currentState, int socketNum, struct sockaddr_in6 *server,
@@ -369,9 +370,12 @@ ReceiveState handleDataPacket(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *f
 		case BUFFERING:
 			return doBufferState(rbuf, incomingPkt, fp, socketNum, server, params);
   		case FLUSHING:
-			return doFlushingState(rbuf, incomingPkt, fp, socketNum, server, params);
+			return doFlushingState(rbuf, fp, socketNum, server, params);
 	}
+	return currentState;
 }
+
+
 
 //should take in the incoming packet, the buffer struct, and destination file
 	// set the expected counter at 0

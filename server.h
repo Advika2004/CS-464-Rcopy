@@ -34,10 +34,11 @@ typedef struct ServerParams{
 void processClient(int socketNum);
 ServerParams checkArgs(int argc, char *argv[]);
 int doGetFilenameState(char* filename, struct sockaddr_in6 * client, socklen_t clientAddrLen);
-int doSendDataState();
+int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, int child_server_socket, struct sockaddr_in6 *client, socklen_t clientAddrLen);
 int doDoneState();
 int doWaitOnAckState();
 int doWaitOnEOFAckState();
+uint32_t getPacketSequence(Packet *packet);
 void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct sockaddr_in6 * client, socklen_t clientAddrLen, int main_server_socket, ServerParams serverParam);
 uint8_t* makeTalkHereNowBeforeChecksum();
 uint8_t* makeVALIDFilenameACKBeforeChecksum();
@@ -48,8 +49,14 @@ uint8_t* makeTalkHereNowAfterChecksum(uint8_t* buffer, uint16_t calculated_check
 uint16_t calculateFilenameChecksumFILENAME(uint8_t* buffer);
 int doDoneState(int child_server_socket);
 void handleZombies(int sig);
+uint8_t* getDataChunk(FILE *fp, int buffer_size, int *bytes_read);
+uint8_t* makeDataPacketBeforeChecksum(uint8_t* data_chunk, uint8_t buffer_size);
+uint16_t calculateDataPacketChecksum(uint8_t *buffer, int buffer_size);
+uint8_t* makeDataPacketAfterChecksum(uint8_t *buffer, uint16_t calculated_checksum);
 
 void printPDU(uint8_t *buffer);
 
 int child_server_socket = 0;
 uint32_t data_sequence_number = 0;
+
+
