@@ -47,15 +47,19 @@ int main (int argc, char *argv[])
 		//check the state
         switch (state) {
             case SEND_FILENAME:
+			printf("Socket number in the Filename state: %d\n", socketNum);
                 state = doSendFilenameState(params, socketNum, &server, buffer_to_send);
                 break;
             case FILE_VALID:
+			printf("Socket number in the File Valid state: %d\n", socketNum);
                 printf("checking if file can be opened\n");
                 state = doFileValidState(params, socketNum, &server, buffer_to_send);
                 break;
             case GET_DATA:
+			printf("Socket number in the Get Data state: %d\n", socketNum);
                 printf("heyyyyy can get data now!!!");
                 state = doGetDataState(params);
+				printf("Socket number in the Get Data state after func: %d\n", socketNum);
                 break;
             case DONE:
                 printf("h");
@@ -176,6 +180,8 @@ int doSendFilenameState(RcopyParams params, int socketNum, struct sockaddr_in6 *
 // this function will also check if the destination file can be opened or not? 
 int doFileValidState(RcopyParams params, int socketNum, struct sockaddr_in6 * server, uint8_t* buffer){
 
+	printf("WHAT IS THE SOCKET NUM UP HERE??: %d\n", ntohl(socketNum));
+
 	//socklen_t serverAddrLen = sizeof(struct sockaddr_in6);
 	uint8_t recv_buffer[ACK_BUFF_SIZE];
 
@@ -274,7 +280,7 @@ int checkDestFile(RcopyParams params){
 
 int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams params){
 
-	printf("[CLIENT] Listening on socket: %d for data packets...\n", socketNum);
+	printf("\n[CLIENT] Listening on socket: %d for data packets...\n", ntohl(socketNum));
 
 	static ReceiveState subState = IN_ORDER;  //this is the starting state (we expect things to come in order)
     int doneReceiving = 0;
