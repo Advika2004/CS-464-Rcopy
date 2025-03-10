@@ -15,6 +15,7 @@
 #include <signal.h>   //For signal() and SIGCHLD
 #include <sys/wait.h> // For waitpid()
 #include "pollLib.h"
+#include "window.h"
 
 #define MAXBUF 80
 #define ACK_BUFF_SIZE 7
@@ -51,3 +52,4 @@ void handleZombies(int sig);
 void printPDU(uint8_t *buffer);
 
 int child_server_socket = 0;
+uint32_t data_sequence_number = 0;

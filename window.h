@@ -20,6 +20,9 @@ typedef struct {
     int window_size;    // Window size (defines how many packets can be in flight)
     int expected;       // Next expected packet in order (Receiver)
     int highest;        // Highest received sequence number (Receiver)
+    uint8_t lastControlPacket[11];  // or CONTROL_BUFF_SIZE
+    int lastControlPacketSize;
+    int hasLastControl;         // boolean, 1=valid, 0=not
 } ReceiverBuffer;
 
 typedef struct {

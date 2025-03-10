@@ -185,23 +185,19 @@ SenderWindow* initSenderWindow(int window_size, int buffer_size) {
 void insertPacketIntoWindow(SenderWindow *window, int sequence_number, const uint8_t *data, int data_size) {
     int index = sequence_number % window->window_size;
 
-    // If slot is not allocated, allocate memory for the packet
     if (!window->buffer[index]) {
-        window->buffer[index] = (Packet*) malloc(sizeof(Packet) + data_size);
-        if (!window->buffer[index]) {
-            perror("Failed to allocate packet in sender window");
-            return;
-        }
+        printf("buffer not allocated properly\n");
     }
 
-    // Fill in the packet
+    // fill in the packet
+    // all packets start out not being acknowledged 
     window->buffer[index]->sequence_number = sequence_number;
     memcpy(window->buffer[index]->data, data, data_size);
     window->buffer[index]->data_size = data_size;
     window->buffer[index]->ACK = 0;  
 }
 
-
+// go into window and change the ack flag (happens after you get RR)
 void acknowledgePacket(SenderWindow *window, int sequence_number) {
     int index = sequence_number % window->window_size;
 
@@ -209,6 +205,7 @@ void acknowledgePacket(SenderWindow *window, int sequence_number) {
     if (window->buffer[index]) {
         window->buffer[index]->ACK = 1;
     }
+    printf("nothing exists at that index\n");
 }
 
 
@@ -224,6 +221,7 @@ int checkPacketACKStatus(SenderWindow *window, int sequence_number) {
 }
 
 // slide the window forward based on RR
+// would pass in the sequence number of the most recent RR
 void advanceSenderWindow(SenderWindow *window, int new_lower) {
     if (new_lower > window->lower) {
         // Free up old packets as the window slides forward
@@ -298,4 +296,3 @@ void printSenderBuffer(SenderWindow *window) {
     printf("Window Range: Lower=%d, Upper=%d, Current=%d\n", window->lower, window->upper, window->current);
     printf("----------------------------\n\n");
 }
-

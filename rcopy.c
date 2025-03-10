@@ -271,12 +271,6 @@ int checkDestFile(RcopyParams params){
 	return 1;
 }
 
-typedef enum {
-	IN_ORDER,
-	BUFFERING,
-	FLUSHING
-} ReceiveState;
-
 
 int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams params){
 
@@ -353,11 +347,33 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
     freeReceiverBuffer(rbuf);
     fclose(fp);
     return DONE;
+
+
+ReceiveState handleDataPacket(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, ReceiveState currentState, int socketNum, struct sockaddr_in6 *server,
+	RcopyParams params)
+{
+	uint32_t seqIncoming = getPacketSequence(incomingPkt);
+
+	// --- Step 1: Check if seqIncoming < expected (old packet) ---
+	if (seqIncoming < rbuf->expected) {
+	// Resend the last control packet we sent (RR or SREJ).
+		resendLastControl(rbuf, socketNum, server);
+		// Remain in the same state, effectively ignoring the old packet.
+		return currentState;
+	}
+
+	// --- Step 2: If seqIncoming >= expected, proceed with normal sub-state logic ---
+	switch (currentState) {
+		case IN_ORDER:
+			return doInOrderState(rbuf, incomingPkt, fp, socketNum, server, params);
+		case BUFFERING:
+			return doBufferState(rbuf, incomingPkt, fp, socketNum, server, params);
+  		case FLUSHING:
+			return doFlushingState(rbuf, incomingPkt, fp, socketNum, server, params);
+	}
 }
 
-
 //should take in the incoming packet, the buffer struct, and destination file
-int doInOrderState(){
 	// set the expected counter at 0
 	// parse the received packet 
 	// check if the expected packet matches the sequence number of the received packet 
@@ -366,20 +382,156 @@ int doInOrderState(){
 	// increment expected
 	// if the received sequence number > expected number, move to buffering state
 	// else just stay in this state.
-	return BUFFERING;
+	ReceiveState doInOrderState(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params)
+{
+	//the next expected
+	uint32_t seqExpected = rbuf->expected;
+	//actual seq of the incoming packet
+	uint32_t seqIncoming = getPacketSequence(incomingPkt);
+
+	if (seqIncoming == seqExpected) {
+		// if its what we want write data directly to output file
+		writePayloadToFile(incomingPkt, fp, params);
+
+		//increment the expected
+		rbuf->expected++;
+
+		// Send RR for the new expected
+		// localSeq could be anything. For example, a local control sequence counter.
+		// Or you can reuse 'seqExpected' if you want.
+		uint8_t *rrBefore = makeRRPacketBeforeChecksum(rr_seq_num, rbuf->expected);
+		uint16_t rrCsum = calculateRR_SREJPacketChecksum(rrBefore);
+		uint8_t* finalRRBuff = makeRR_SREJPacketAfterChecksum(rrBefore, rrCsum);
+
+		// Send the 11-byte RR
+		memcpy(rbuf->lastControlPacket, finalRRBuff, CONTROL_BUFF_SIZE);
+    	rbuf->lastControlPacketSize = CONTROL_BUFF_SIZE;
+    	rbuf->hasLastControl = 1;
+
+		int retries = 0;
+		while (retries < 9){
+			int bytes_sent = sendtoErr(socketNum, finalRRBuff, CONTROL_BUFF_SIZE, 0, (struct sockaddr *)server, sizeof(*server));
+			if (bytes_sent >= 0){
+				break;
+			}
+			perror("sending RR failed\n");
+			retries++;
+			rr_seq_num++;
+
+			// Poll for incoming packets before retrying
+            int pollResult = pollCall(1000);  // Wait for 1 second
+            if (pollResult == socketNum) {
+                // Received something, check if it's the next expected packet
+                Packet responsePkt;
+                int received_bytes = recvfrom(socketNum, &responsePkt, sizeof(responsePkt), 0, NULL, NULL);
+                if (received_bytes > 0) {
+                    uint32_t receivedSeq = getPacketSequence(&responsePkt);
+                    uint8_t receivedFlag = getPacketFlag(&responsePkt);
+
+                    if (receivedSeq == rbuf->expected && receivedFlag == 16) { // 16 = DATA_PACKET_FLAG
+                        // We got the next expected packet → Stay in IN_ORDER
+                        return IN_ORDER;
+					}
+
+				}
+			}
+		}
+
+        // If we fail after 10 tries, move to BUFFERING
+		printf("tried resending 10 times, server not responsive");
+        return DONE;
+    } 
+    else if (seqIncoming > seqExpected) {
+        // If packet is out-of-order, move to BUFFERING
+        return BUFFERING;
+    } 
+    else {
+        // If packet is old/duplicate, ignore it and stay in IN_ORDER
+        return IN_ORDER;
+    }
 }
 
-int doBufferState(){
+void resendLastControl(ReceiverBuffer *rbuf, int socketNum, struct sockaddr_in6 *server)
+{
+    if (rbuf->hasLastControl) {
+        // re-send the exact bytes
+        int bytesSent = sendtoErr(socketNum, rbuf->lastControlPacket,
+                                  rbuf->lastControlPacketSize, 0,
+                                  (struct sockaddr*)server, sizeof(*server));
+        if (bytesSent < 0) {
+            perror("resendLastControl failed");
+        }
+    } else {
+        //! not sure what to do here!
+		printf("reached here and don't know what to do");
+    }
+}
+
+
 	// while the received sequence number > expected number
 	// put the packet into the buffer
 	// set the highest variable to the received sequence number
 	// will tell you the largest thing in the buffer
 	// use that to know what to send an RR for after the buffer is flushed (what is next)
 	//  if th received packet sequence number == the expeced number move to the flushing state
-	return FLUSHING;
+
+ReceiveState doBufferState(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params)
+{
+	// which is the next expected
+    uint32_t seqExpected = rbuf->expected;
+    uint32_t seqIncoming = getPacketSequence(incomingPkt);
+
+    // Store the out-of-order packet in the buffer
+    insertReceiverPacket(rbuf, incomingPkt);
+    
+    // Update highest received packet
+    if (seqIncoming > rbuf->highest) {
+        rbuf->highest = seqIncoming;
+    }
+
+    // Retry sending SREJ up to 10 times
+    int retries = 0;
+    while (retries < 10) {
+        // Send an SREJ for the missing packet
+        uint8_t *srejBefore = makeSREJPacketBeforeChecksum(srej_seq_num, seqExpected);
+        uint16_t srejCsum = calculateRR_SREJPacketChecksum(srejBefore);
+        uint8_t* buff_to_send = makeRR_SREJPacketAfterChecksum(srejBefore, srejCsum);
+
+        int sent_bytes = sendtoErr(socketNum, buff_to_send, CONTROL_BUFF_SIZE, 0, (struct sockaddr *)server, sizeof(*server));
+        if (sent_bytes >= 0) {
+            printf("SREJ sent for missing packet %u\n", seqExpected);
+        } else {
+            perror("sending SREJ failed, retrying...");
+        }
+
+        srej_seq_num++;
+
+        // Poll for the missing packet before retrying
+        int pollResult = pollCall(1000);  // 1-second timeout
+        if (pollResult == socketNum) {
+            // Received something, check if it's the missing packet
+            Packet responsePkt;
+            int received_bytes = recvfrom(socketNum, &responsePkt, sizeof(responsePkt), 0, NULL, NULL);
+            if (received_bytes > 0) {
+                uint32_t receivedSeq = getPacketSequence(&responsePkt);
+                uint8_t receivedFlag = getPacketFlag(&responsePkt);
+
+                if (receivedSeq == seqExpected && receivedFlag == 16) { // 16 = DATA_PACKET_FLAG
+                    // The missing packet has arrived → Move to FLUSHING
+                    return FLUSHING;
+                }
+            }
+        }
+        retries++;
+    }
+
+    // If after 10 retries the expected packet never comes, assume sender is dead
+    printf("ERROR: SREJ sent 10 times, but missing packet %u never arrived. Terminating...\n", seqExpected);
+    return DONE;
 }
 
-int doFlushingState(){
+
+
 	// write the expected and received packet to disc 
 	// increment the expected count 
 	// while the sequence number == the expected number 
@@ -391,9 +543,32 @@ int doFlushingState(){
 	// if flushing ends and the buffer is empty, then more to the in order state again (expected = highest)
 		// increment expected
 		// RR for the expected
-	return BUFFERING;
-	return FLUSHING;
-}
+
+		ReceiveState doFlushingState(ReceiverBuffer *rbuf, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params)
+		{
+			printf("Entering FLUSHING state. Expected: %d, Highest: %d\n", rbuf->expected, rbuf->highest);
+		
+			// Call `flushBuffer()` to write packets to the file
+			int flushedPackets = flushBuffer(rbuf, fp, params.buffer_size);
+		
+			if (flushedPackets > 0) {
+				printf("Flushed %d packets to file. New expected: %d\n", flushedPackets, rbuf->expected);
+			} else {
+				printf("No packets flushed. Possible missing packet at %d.\n", rbuf->expected);
+			}
+		
+			printReceiverBuffer(rbuf); // Debugging
+		
+			if (rbuf->expected > rbuf->highest) {
+				// Buffer is empty, transition to IN_ORDER and send an RR
+				printf("Buffer fully flushed. Moving to IN_ORDER.\n");
+				return IN_ORDER;
+			} else {
+				// Missing packet detected, move to BUFFERING and send an SREJ
+				printf("Flushing stopped at missing packet %d. Moving to BUFFERING.\n", rbuf->expected);
+				return BUFFERING;
+			}
+		}
 
 
 void doDoneState(int socketNum, FILE *destFile){

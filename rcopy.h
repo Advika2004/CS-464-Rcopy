@@ -56,6 +56,13 @@ typedef struct RcopyParams {
     int remote_port; 
 } RcopyParams; 
 
+typedef enum {
+	IN_ORDER,
+	BUFFERING,
+	FLUSHING
+} ReceiveState;
+
+
 //void talkToServer(int socketNum, struct sockaddr_in6 * server);
 int readFromStdin(char * buffer);
 RcopyParams checkArgs(int argc, char * argv[]);
@@ -73,6 +80,14 @@ uint16_t calculateFilenameChecksumACK(uint8_t* buffer);
 uint8_t* makeFilenameACKAfterChecksum(uint8_t* buffer, uint16_t calculated_checksum);
 void writePayloadToFile(Packet *packet, FILE *file, RcopyParams params);
 uint8_t getPacketFlag(Packet *packet);
+uint32_t getPacketSequence(Packet *packet);
+void writePayloadToFile(Packet *packet, FILE *file, RcopyParams params);
+ReceiveState handleDataPacket(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, ReceiveState currentState, int socketNum, struct sockaddr_in6 *server,
+	RcopyParams params);
+ReceiveState doInOrderState(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params);
+void resendLastControl(ReceiverBuffer *rbuf, int socketNum, struct sockaddr_in6 *server);
+ReceiveState doBufferState(ReceiverBuffer *rbuf, Packet *incomingPkt, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params);
+ReceiveState doFlushingState(ReceiverBuffer *rbuf, FILE *fp, int socketNum, struct sockaddr_in6 *server, RcopyParams params);
 uint8_t* makeRRPacketBeforeChecksum(uint32_t localSeq, uint32_t rrSequence);
 uint8_t* makeRR_SREJPacketAfterChecksum(uint8_t *buffer, uint16_t calculated_sum);
 uint16_t calculateRR_SREJPacketChecksum(uint8_t *buffer);
@@ -86,3 +101,5 @@ FILE *curr_file_open;
 // make it a global, upon start this is the one given by the command line
 int main_server_port;
 int current_server_port;
+uint32_t rr_seq_num = 0;   // Sequence number for RR packets
+uint32_t srej_seq_num = 0; // Sequence number for SREJ packets

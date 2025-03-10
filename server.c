@@ -329,10 +329,263 @@ int doDoneState(int child_server_socket) {
     exit(0);
 }
 
-int doSendDataState() {
-	
-	return DONE;
+
+
+
+
+
+
+
+int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, int child_server_socket, struct sockaddr_in6 *client, socklen_t clientAddrLen) {
+    // Open the file for reading
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        perror("Failed to open file for reading");
+        return DONE;
+    }
+
+    // Initialize the sender window
+    SenderWindow *window = initSenderWindow(window_size, buffer_size);
+    if (!window) {
+        return DONE;
+    }
+
+    int bytesRead = 0;
+    uint8_t *data_chunk = NULL;
+    int doneSending = 0;
+
+    while (!doneSending) {
+
+        // **Step 1: Fill the window while it is open and not EOF**
+        while (canSendMorePackets(window)) {
+            // Read next chunk from file
+            data_chunk = getDataChunk(file, buffer_size, &bytesRead);
+
+            // **Handle EOF case**
+            if (bytesRead == 0) {
+                printf("Reached EOF, sending EOF packet.\n");
+                sendEOFpacket(child_server_socket, client, clientAddrLen); // Call the EOF sending function
+                return WAIT_ON_EOF_ACK;  // Move to EOF state immediately
+            }
+
+            // Create the Data PDU
+            uint8_t *dataPDU = makeDataPacketBeforeChecksum(data_chunk);
+            uint16_t checksum = calculateDataPacketChecksum(dataPDU, bytesRead);
+            uint8_t *finalPDU = makeDataPacketAfterChecksum(dataPDU, checksum);
+
+            // Insert into the sender window
+            insertPacketIntoWindow(window, data_sequence_number, finalPDU, bytesRead + 7);
+
+            // Send the packet to the receiver
+            int index = data_sequence_number % window->window_size;
+            int bytes_sent = sendtoErr(child_server_socket, window->buffer[index]->data,
+                                       bytesRead + 7, 0, (struct sockaddr*) client, clientAddrLen);
+
+            printf("Sent packet #%d, Bytes: %d\n", data_sequence_number, bytes_sent);
+
+            if (bytes_sent < 0) {
+                perror("sendtoErr failed");
+                return DONE;
+            }
+
+            data_sequence_number++;  // Increment the global sequence number
+        }
+
+        // **Step 2: Poll indefinitely for RR/SREJ responses**
+        while (pollCall(0) > 0) {  // Poll indefinitely (as long as there is data to process)
+            uint8_t recv_buffer[ACK_BUFF_SIZE];
+            struct sockaddr_in6 fromAddr;
+            socklen_t fromLen = sizeof(fromAddr);
+
+            int received = recvfrom(child_server_socket, recv_buffer, ACK_BUFF_SIZE, 0,
+                                    (struct sockaddr*)&fromAddr, &fromLen);
+
+            if (received > 0) {
+                uint8_t response_flag = recv_buffer[6];  // Extract flag
+                uint32_t receivedSeq = getPacketSequence((Packet*) recv_buffer);
+
+                if (response_flag == 5) {  // RR Received
+                    printf("Received RR for %d\n", receivedSeq);
+                    acknowledgePacket(window, receivedSeq);
+                    advanceSenderWindow(window, receivedSeq + 1);
+                } else if (response_flag == 6) {  // SREJ Received
+                    printf("Received SREJ for %d, resending...\n", receivedSeq);
+                    int index = receivedSeq % window->window_size;
+                    sendtoErr(child_server_socket, window->buffer[index]->data,
+                              window->buffer[index]->data_size + 7, 0,
+                              (struct sockaddr*) client, clientAddrLen);
+					//!add the error check for if send bytes is < 0
+                }
+            }
+        }
+
+        // **Step 3: If the window is full and not EOF, wait for RR/SREJ**
+		// now the window is full but the file is not over 
+        while (!canSendMorePackets(window) && !doneSending) {
+            int pollResult = pollCall(1000);  // Poll with 1s timeout
+            if (pollResult > 0) {
+                // Process RR or SREJ
+                uint8_t recv_buffer[ACK_BUFF_SIZE];
+                struct sockaddr_in6 fromAddr;
+                socklen_t fromLen = sizeof(fromAddr);
+
+                int received = recvfrom(child_server_socket, recv_buffer, ACK_BUFF_SIZE, 0,
+                                        (struct sockaddr*)&fromAddr, &fromLen);
+
+                if (received > 0) {
+                    uint8_t response_flag = recv_buffer[6];
+                    uint32_t receivedSeq = getPacketSequence((Packet*) recv_buffer);
+
+                    if (response_flag == 5) {  // RR
+                        printf("Received RR for %d\n", receivedSeq);
+                        acknowledgePacket(window, receivedSeq);
+                        advanceSenderWindow(window, receivedSeq + 1);
+                    } else if (response_flag == 6) {  // SREJ
+                        printf("Received SREJ for %d, resending...\n", receivedSeq);
+                        int index = receivedSeq % window->window_size;
+                        sendtoErr(child_server_socket, window->buffer[index]->data,
+                                  window->buffer[index]->data_size + 7, 0,
+                                  (struct sockaddr*) client, clientAddrLen);
+						//!add the error check for if send bytes is < 0
+                    }
+                }
+            } 
+			else {
+				// Timeout: Find the lowest unacknowledged packet in the window
+				int found_unacked = 0;
+				int seq;
+			
+				// loop through and find the lowest one that is unacknowledged and send that one
+				for (seq = window->lower; seq <= window->upper; seq++) {
+					int index = seq % window->window_size;
+			
+					// Check if the packet exists and is NOT acknowledged
+					if (window->buffer[index] && window->buffer[index]->ACK == 0) {
+						printf("Timeout occurred, resending unacknowledged packet with sequence number %d\n", seq);
+						
+						// Resend the packet
+						sendtoErr(child_server_socket, window->buffer[index]->data,
+								  window->buffer[index]->data_size + 7, 0,
+								  (struct sockaddr*) client, clientAddrLen);
+						
+						found_unacked = 1; // Mark that we found an unacknowledged packet
+						break; // Stop searching after resending the first unacknowledged packet
+					}
+				}
+			
+				// If all packets in the window are already acknowledged, do nothing
+				if (!found_unacked) {
+					printf("Timeout occurred, but all packets in the window are already acknowledged. No retransmission needed.\n");
+				}
+			}			
+        }
+    }
+
+    return WAIT_ON_EOF_ACK; // Final transition after all packets sent
 }
+
+
+
+
+
+
+
+
+// will take in the chunk of data read out from the file and make the PDU
+uint8_t* makeDataPacketBeforeChecksum(uint8_t* data_chunk){
+	uint8_t static buffer[MAX_HEADER_LEN + buffer_size];
+
+	//chose 1 for the sequence number for acks as well
+    uint32_t sequence_num = ntohl(data_sequence_number);
+    memcpy(buffer, &sequence_num, 4);
+	
+	//initially put checksum zerod out
+	uint16_t zero_checksum = 0;
+    memcpy(buffer + 4, &zero_checksum, 2);
+
+	//flag for fileame packet is 8
+	uint8_t flag = 16;
+    memcpy(buffer + 6, &flag, 1);
+
+	//put the data in there
+	memcpy(buffer + 7, data_chunk, sizeof(data_chunk));
+
+    return buffer;
+}
+
+uint8_t* makeDataPacketAfterChecksum(uint8_t *buffer, uint16_t calculated_checksum){
+	//put in the calculated checksum
+    memcpy(buffer + 4, &calculated_checksum, 2);
+    return buffer;
+}
+
+uint16_t calculateDataPacketChecksum(uint8_t *buffer, int buffer_size){
+	int length_of_buffer = buffer_size + 7;
+	if (lenght_of_buffer % 2 == 0){
+		// it is already even 
+		uint16_t static temp_buff[buffer_size + 7];
+		// copy in the header
+		memcpy(temp_buff, buffer, 7);
+		// copy in the data (buffer size number of bytes after the header)
+		memcpy(temp_buff + 7, buffer, buffer_size)
+		uint16_t calculatedChecksum = in_cksum(temp_buff, sizeof(temp_buff));
+		return calculatedChecksum;
+	}
+	// it is odd, add 1 more byte
+	uint16_t static temp_buff[buffer_size + 7 + 1];
+	//goal is to make the static buffer the next closest even number of bytes based on the buffer size + 7
+	// copy in the header
+	memcpy(temp_buff, buffer, 7);
+	// copy in the data (buffer size number of bytes after the header)
+	memcpy(temp_buff + 7, buffer, buffer_size)
+	uint8_t even_length = 0;
+	memcpy(temp_buff + 7, &even_length, 1);
+	uint16_t calculatedChecksum = in_cksum(temp_buff, sizeof(temp_buff));
+	return calculatedChecksum;
+}
+
+//helper function to read through the file and make data packets 
+// will read through the input file in the amount of buffer_size bytes specified
+	// will put that in a byte buffer
+	// will pass that to the next functions
+    // will use the functions above to make the data PDU
+	//will return the data in a buffer
+	//bytes_read stores how many bytes were read
+	// check this to make sure that its not EOF
+	uint8_t* getDataChunk(FILE *fp, int buffer_size, int *bytes_read)
+	{
+		if (!fp || buffer_size <= 0 || !bytes_read) {
+			// Invalid parameters
+			if (bytes_read) {
+				*bytes_read = 0;
+			}
+			return NULL;
+		}
+	
+		// Allocate a temporary buffer on the heap
+		uint8_t *chunk = (uint8_t*)malloc(buffer_size);
+		if (!chunk) {
+			perror("Failed to allocate data chunk");
+			*bytes_read = 0;
+			return NULL;
+		}
+	
+		// Attempt to read up to 'buffer_size' bytes
+		size_t nread = fread(chunk, 1, buffer_size, fp);
+	
+		if (nread == 0) {
+			// No data read -> either EOF or error
+			free(chunk);
+			*bytes_read = 0;
+			return NULL;
+		}
+	
+		// We successfully read some bytes
+		*bytes_read = (int)nread;
+	
+		return chunk;
+	}
+
 
 // int doWaitOnAckState() {
 // 	return 0;

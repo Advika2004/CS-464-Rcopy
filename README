@@ -200,7 +200,7 @@ ON DA SERVER:
     - else 
         - resend lowest packet 
 
-(window closed):
+- while (window closed):
 - when current = upper
 - this means that the window is full and it can't move forward until it gets an RR
 - the RR frees up space in the window and move both lower and current 
@@ -439,4 +439,56 @@ int doFlushingState(){
 
 
 TODO:
-need to change the done state to free the receiver buffer
+- need to change the done state to free the receiver buffer
+- deal with flag 17 and 18
+- have DONE state close the file on the server 
+- check if I used the packet structure properly in Rcopy
+- i dont think I made a instance of it when putting it in the buffer
+- reset the sequence number global when creating the sliding window 
+- finish the following functions properly: 
+
+// need to make this to resend the packet 
+uint8_t* makeRESENTDataPacketBeforeChecksum(uint8_t buffer){
+	uint8_t static buffer[MAX_HEADER_LEN + buffer_size];
+
+	//chose 1 for the sequence number for acks as well
+    uint32_t sequence_num = ntohl(data_sequence_number);
+    memcpy(buffer, &sequence_num, 4);
+	
+	//initially put checksum zerod out
+	uint16_t zero_checksum = 0;
+    memcpy(buffer + 4, &zero_checksum, 2);
+
+	//flag for fileame packet is 8
+	uint8_t flag = 17;
+    memcpy(buffer + 6, &flag, 1);
+
+    return buffer;
+}
+
+uint8_t* makeTIMEOUTDataPacketBeforeChecksum(uint8_t buffer){
+	uint8_t static buffer[MAX_HEADER_LEN + buffer_size];
+
+	//chose 1 for the sequence number for acks as well
+    uint32_t sequence_num = ntohl(data_sequence_number);
+    memcpy(buffer, &sequence_num, 4);
+	
+	//initially put checksum zerod out
+	uint16_t zero_checksum = 0;
+    memcpy(buffer + 4, &zero_checksum, 2);
+
+	//flag for fileame packet is 8
+	uint8_t flag = 18;
+    memcpy(buffer + 6, &flag, 1);
+
+    return buffer;
+}
+
+
+
+// helper functions:
+- read through the file buffer_size amount of bytes at a time and put that into a buffer_size sized buffer
+    - return that buffer
+    - increment the global pointer to where in the file by the amount of bytes just read out
+    - if EOF is read, idk what to signal but signal somehow that EOF has been reached 
+- 
