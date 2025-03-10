@@ -441,6 +441,7 @@ int doFlushingState(){
 TODO:
 - need to change the done state to free the receiver buffer
 - deal with flag 17 and 18
+- figure out why the current in the sending window is never updating
 - have DONE state close the file on the server 
 - check if I used the packet structure properly in Rcopy
 - i dont think I made a instance of it when putting it in the buffer

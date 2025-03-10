@@ -274,6 +274,8 @@ int checkDestFile(RcopyParams params){
 
 int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams params){
 
+	printf("[CLIENT] Listening on socket: %d for data packets...\n", socketNum);
+
 	static ReceiveState subState = IN_ORDER;  //this is the starting state (we expect things to come in order)
     int doneReceiving = 0;
 	int attempts = 0;
@@ -303,14 +305,21 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
             struct sockaddr_in6 fromAddr;
             socklen_t fromLen = sizeof(fromAddr);
 
+			printf("[DEBUG] Poll detected activity. Attempting to receive a packet...\n");
+
             //receive the data
             int bytes = recvfrom(socketNum, &incomingPkt, sizeof(incomingPkt), 0,
                                  (struct sockaddr*)&fromAddr, &fromLen);
 
-            if (bytes <= 0) {
-                //!check if nothing was recieved, then move to DONE? 
-                return DONE;
-            }
+			if (bytes < 0) {
+				perror("[ERROR] recvfrom failed");
+				return DONE;
+			} else if (bytes == 0) {
+				printf("[DEBUG] recvfrom received 0 bytes (possible closed connection).\n");
+				return DONE;
+			}
+
+			printf("[DEBUG] Received packet: %d bytes\n", bytes);
 
             //start up the second state machine
             subState = handleDataPacket(rbuf, &incomingPkt, fp, subState, socketNum, server, params);
@@ -319,6 +328,7 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
             // extract the flag and make sure that its not 10
             uint8_t flag = getPacketFlag(&incomingPkt);
             if (flag == 10) {
+				printf("[DEBUG] EOF Packet received! Sending EOF ACK.\n");
 				// if it is EOF, then move to DONE state
 				//! write the EOF to the output file? 
                 //!Then send an EOF ACK if your protocol requires it
@@ -332,7 +342,10 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
 			// if it has then leave the program? 
 			attempts++;
 
+			printf("[DEBUG] Timeout occurred. Attempt %d/9\n", attempts);
+
 			if (attempts > 9){
+				printf("[ERROR] Maximum retries reached. Terminating receiver.\n");
 				//! must ask about this
 				return DONE;
 			}
@@ -346,6 +359,7 @@ int doGetDataState(int socketNum, struct sockaddr_in6 *server, RcopyParams param
 	//! should I do this after the EOF is dealt with? what if that gets lost? 
     freeReceiverBuffer(rbuf);
     fclose(fp);
+	printf("[DEBUG] File closed successfully.\n");
     return DONE;
 }
 
@@ -697,7 +711,7 @@ RcopyParams checkArgs(int argc, char * argv[])
 	strncpy(parameters.src_filename, argv[1], MAX_FILENAME_LEN);
     parameters.src_filename[MAX_FILENAME_LEN] = '\0';
 
-	strncpy(parameters.dest_filename, argv[1], MAX_FILENAME_LEN);
+	strncpy(parameters.dest_filename, argv[2], MAX_FILENAME_LEN);
     parameters.dest_filename[MAX_FILENAME_LEN] = '\0';
 
 	parameters.window_size = atoi(argv[3]);

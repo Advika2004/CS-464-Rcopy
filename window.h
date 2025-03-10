@@ -50,4 +50,3 @@ int canSendMorePackets(SenderWindow *window);
 void destroySenderWindow(SenderWindow *window);
 void printReceiverBuffer(ReceiverBuffer *buffer);
 void printSenderBuffer(SenderWindow *window);
-

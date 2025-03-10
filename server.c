@@ -193,6 +193,7 @@ void startFSM(char* filename, uint16_t buffer_size, uint32_t window_size, struct
                 break;
 			case WAIT_ON_EOF_ACK:
                 printf("waiting on eof ack\n");
+				exit(1);
 				//state = doWaitOnEOFAckState();
                 break;
         }
@@ -338,6 +339,10 @@ int doDoneState(int child_server_socket) {
 
 int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, int child_server_socket, struct sockaddr_in6 *client, socklen_t clientAddrLen) {
     // Open the file for reading
+
+	
+	printf("Opening file: %s\n", filename);
+
     FILE *file = fopen(filename, "rb");
     if (!file) {
         perror("Failed to open file for reading");
@@ -356,10 +361,18 @@ int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, 
 
     while (!doneSending) {
 
+		printf("\n[DEBUG] Beginning of while loop. Checking if window can send more packets.\n");
+        printSenderBuffer(window);
+
         // **Step 1: Fill the window while it is open and not EOF**
         while (canSendMorePackets(window)) {
+
+			printf("\n[DEBUG] Window is open. Attempting to read next data chunk.\n");
+
             // Read next chunk from file
             data_chunk = getDataChunk(file, buffer_size, &bytesRead);
+
+			printf("[DEBUG] Read %d bytes from file.\n", bytesRead);
 
             // **Handle EOF case**
             if (bytesRead == 0) {
@@ -372,9 +385,12 @@ int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, 
             uint8_t *dataPDU = makeDataPacketBeforeChecksum(data_chunk, buffer_size);
             uint16_t checksum = calculateDataPacketChecksum(dataPDU, bytesRead);
             uint8_t *finalPDU = makeDataPacketAfterChecksum(dataPDU, checksum);
+			printf("[DEBUG] Created Data PDU for sequence #%d\n", data_sequence_number);
 
             // Insert into the sender window
             insertPacketIntoWindow(window, data_sequence_number, finalPDU, bytesRead + 7);
+			printf("[DEBUG] Inserted packet #%d into sender window.\n", data_sequence_number);
+            printSenderBuffer(window);
 
             // Send the packet to the receiver
             int index = data_sequence_number % window->window_size;
@@ -493,10 +509,14 @@ int doSendDataState(char *filename, uint16_t buffer_size, uint32_t window_size, 
 
 // will take in the chunk of data read out from the file and make the PDU
 uint8_t* makeDataPacketBeforeChecksum(uint8_t* data_chunk, uint8_t buffer_size){
-	uint8_t *buffer[MAX_HEADER_LEN + buffer_size];
+	uint8_t *buffer = malloc(7 + buffer_size); // 4(seq) + 2(checksum) + 1(flag) + data
+	if (!buffer) {
+    	perror("Failed to allocate data packet buffer");
+    	return NULL;
+	}
 
 	//chose 1 for the sequence number for acks as well
-    uint32_t sequence_num = ntohl(data_sequence_number);
+    uint32_t sequence_num = htonl(data_sequence_number);
     memcpy(buffer, &sequence_num, 4);
 	
 	//initially put checksum zerod out
@@ -510,7 +530,7 @@ uint8_t* makeDataPacketBeforeChecksum(uint8_t* data_chunk, uint8_t buffer_size){
 	//put the data in there
 	memcpy(buffer + 7, data_chunk, buffer_size);
 
-    return *buffer;
+    return buffer;
 }
 
 uint8_t* makeDataPacketAfterChecksum(uint8_t *buffer, uint16_t calculated_checksum){
@@ -519,29 +539,36 @@ uint8_t* makeDataPacketAfterChecksum(uint8_t *buffer, uint16_t calculated_checks
     return buffer;
 }
 
-uint16_t calculateDataPacketChecksum(uint8_t *buffer, int buffer_size){
-	uint8_t length_of_buffer = buffer_size + 7;
-	if (length_of_buffer % 2 == 0){
-		// it is already even 
-		uint16_t temp_buff[buffer_size + 7];
-		// copy in the header
-		memcpy(temp_buff, buffer, 7);
-		// copy in the data (buffer size number of bytes after the header)
-		memcpy(temp_buff + 7, buffer, buffer_size);
-		uint16_t calculatedChecksum = in_cksum(temp_buff, sizeof(temp_buff));
-		return calculatedChecksum;
-	}
-	// it is odd, add 1 more byte
-	uint16_t temp_buff[buffer_size + 7 + 1];
-	//goal is to make the static buffer the next closest even number of bytes based on the buffer size + 7
-	// copy in the header
-	memcpy(temp_buff, buffer, 7);
-	// copy in the data (buffer size number of bytes after the header)
-	memcpy(temp_buff + 7, buffer, buffer_size);
-	uint8_t even_length = 0;
-	memcpy(temp_buff + 7, &even_length, 1);
-	uint16_t calculatedChecksum = in_cksum(temp_buff, sizeof(temp_buff));
-	return calculatedChecksum;
+uint16_t calculateDataPacketChecksum(uint8_t *buffer, int buffer_size) {
+    // Ensure the checksum buffer is even-length
+    int checksum_size = buffer_size + 7;  
+    if (checksum_size % 2 != 0) {
+        checksum_size++; // Pad to make even
+    }
+
+    // Use uint16_t for proper alignment
+    uint16_t *temp_buff = malloc(checksum_size);
+    if (!temp_buff) {
+        perror("Failed to allocate checksum buffer");
+        return 0;
+    }
+
+    // Copy header and data into aligned buffer
+    memcpy(temp_buff, buffer, buffer_size + 7);
+
+    // If padded, explicitly set the last byte to 0
+    if (buffer_size % 2 != 0) {
+        uint8_t *byte_access = (uint8_t*)temp_buff;
+        byte_access[checksum_size - 1] = 0;
+    }
+
+    // Calculate checksum
+    uint16_t calculatedChecksum = in_cksum(temp_buff, checksum_size);
+
+    // Free allocated memory
+    free(temp_buff);
+
+    return calculatedChecksum;
 }
 
 //helper function to read through the file and make data packets 
